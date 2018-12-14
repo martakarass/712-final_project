@@ -16,7 +16,7 @@ Two minute screencast with narration showing a demo of the project can be access
 <span style="color:blue">Location of project's GitHub repository</span>
 =======================================================================
 
-The project's GitHub repository can be found here: <https://martakarass.github.io/712_final_project>
+The project's GitHub repository can be found here: <https://martakarass.github.io/712-final_project/>
 
 In particular, the project's GitHub repository contains:
 
