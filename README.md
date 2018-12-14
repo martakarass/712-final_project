@@ -20,9 +20,9 @@ The project's GitHub repository can be found here: <https://martakarass.github.i
 
 In particular, the project's GitHub repository contains:
 
--   final <span style="color:blue">RMarkdown file</span>: \[\]
+-   final <span style="color:blue">RMarkdown file</span>: [2018-12-09-project-summary.Rmd (link)](https://github.com/martakarass/712-final_project/blob/master/Rmd_files/2018-12-09-project-summary/2018-12-09-project-summary.Rmd)
 
--   corresponding <span style="color:blue">compiled HTML file</span>: \[\]
+-   corresponding <span style="color:blue">compiled HTML file</span>: [2018-12-09-project-summary.html (link)](https://github.com/martakarass/712-final_project/blob/master/Rmd_files/2018-12-09-project-summary/2018-12-09-project-summary.html)
 
 Motivation and Overview
 =======================
