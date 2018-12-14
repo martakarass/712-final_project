@@ -1,0 +1,145 @@
+---
+title: 'Features engineering: task 4'
+author: "Marta Karas"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: 
+  html_document:
+    toc: false
+    toc_depth: 3
+---
+
+_ Installation time of a package 
+
+```{r, include = FALSE}
+rm(list = ls())
+knitr::opts_chunk$set(include = TRUE, comment = NA, cache = FALSE, 
+                      message = FALSE, warning = FALSE)
+options(stringsAsFactors=FALSE)
+
+```
+
+* Define project folder `712-final_project` path. That is, modify `project.dir` string below; once it points to your `712-final_project` folder location, all other stuff below would work. 
+
+```{r}
+
+# library(rvest)
+# library(ggplot2)
+# library(dplyr)
+# library(future)
+# library(stringi)
+# library(tm)
+# library(tools)
+
+user.name<-Sys.info()[7]
+if(user.name=="antiporta") project.dir <- "/Users/antiporta/Dropbox/712-final_project/"
+if(user.name=="mkaras") project.dir <- "/Users/mkaras/Dropbox/JHU/711-ADV_DATA_SCIENCE/712-final_project"
+```
+
+
+# Read `data.frame` with package name, package first release 
+
+```{r}
+path.tmp <- file.path(project.dir, "data/pkg_first_release_SUBSET.csv")
+pkg_first_rel <- read.csv(path.tmp, stringsAsFactors = FALSE)
+pkg_first_rel$first_release <- as.Date(pkg_first_rel$first_release)
+
+## Preview
+head(pkg_first_rel)
+```
+
+These are all base packages: 
+
+```
+            Package Priority
+base           base     base
+compiler   compiler     base
+datasets   datasets     base
+graphics   graphics     base
+grDevices grDevices     base
+grid           grid     base
+methods     methods     base
+parallel   parallel     base
+splines     splines     base
+stats         stats     base
+stats4       stats4     base
+tcltk         tcltk     base
+tools         tools     base
+utils         utils     base
+```
+
+# 1. Installation time of a package 
+
+```{r}
+
+## Function remove all installed packages r 
+## based on: https://www.r-bloggers.com/how-to-remove-all-user-installed-packages-in-r/
+
+remove_all_but_esstential_packages <- function(){
+  # Create a list of all installed packages
+  ip <- as.data.frame(installed.packages())
+  before.rm <- dim(ip)[1]
+  # If you use MRO, make sure that no packages in this library will be removed
+  ip <- subset(ip, !grepl("MRO", ip$LibPath))
+  ## We don't want to remove base or recommended packages eithe
+  ip <- ip[!(ip[, "Priority"] %in% c("base")),]
+  # Determine the library where the packages are installed
+  # path.lib <- unique(ip$LibPath)
+  # Create a vector with all the names of the packages you want to remove
+  pkgs.to.remove <- ip[,1]
+  # Remove the packages
+  sapply(pkgs.to.remove, remove.packages)
+  ## Sanity checking: How many packages are left? 
+  after.rm <- dim(as.data.frame(installed.packages()))[1]
+  message(paste0("# of installed packages before: ", before.rm, ", after: ", after.rm))
+}
+
+remove_all_but_esstential_packages()
+
+## Path to save the files
+out.path <- file.path(project.dir, "data/pkg_install_time.csv")
+
+## Objects to store iteration results
+pkg_name.vec <- numeric()
+install_time_sec.vec <- numeric()  
+
+packageNames.vec <- pkg_first_rel$pkg_name
+n0 <- 381
+n <- length(packageNames.vec)
+# n <- 10
+
+for (i in n0:n){
+  
+  pkg_name.i <- packageNames.vec[i]
+  message(paste0(i, ": ", pkg_name.i))
+  
+  tryCatch({
+     remove_all_but_esstential_packages()
+      t1 <- Sys.time()
+      install.packages(pkg_name.i, quiet = TRUE, dependencies = c("Depends", "Imports"), ask = FALSE)
+      t2 <- Sys.time()
+      t.diff <- as.numeric(t2 - t1, units = "secs")
+      ## Save results of current iteration
+      pkg_name.vec         <- c(pkg_name.vec, pkg_name.i)
+      install_time_sec.vec <- c(install_time_sec.vec, t.diff)
+      message(paste0(i, " t.diff: ", round(t.diff, 1)))
+      
+    }, error = function(e) { 
+      ## Save results of current iteration
+      pkg_name.vec         <- c(pkg_name.vec, pkg_name.i)
+      install_time_sec.vec <- c(install_time_sec.vec, NA)
+    })
+  
+   ## Save data frame to file
+  if (i %% 10 == 0){
+    df.tmp <- data.frame(pkg_name = pkg_name.vec,
+                         install_time_sec = install_time_sec.vec)
+    write.csv(df.tmp, out.path, row.names = FALSE, quote = FALSE)
+  }
+}
+
+df.tmp <- data.frame(pkg_name = pkg_name.vec,
+                     install_time_sec = install_time_sec.vec)
+
+
+```
+

@@ -1,0 +1,101 @@
+---
+title: 'Features engineering: task 1'
+author: "Perry"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: 
+  html_document:
+    toc: false
+    toc_depth: 3
+---
+
+- text features from package title         
+- text features from package description      
+
+
+```{r, include = FALSE}
+rm(list = ls())
+knitr::opts_chunk$set(include = TRUE, comment = NA, cache = FALSE, 
+                      message = FALSE, warning = FALSE)
+options(stringsAsFactors=FALSE)
+
+```
+
+* Define project folder `712-final_project` path. That is, modify `project.dir` string below; once it points to your `712-final_project` folder location, all other stuff below would work. 
+
+```{r}
+
+library(rvest)
+library(ggplot2)
+library(dplyr)
+library(future)
+library(stringi)
+library(tm)
+library(tools)
+
+user.name<-Sys.info()[7]
+if(user.name=="antiporta") project.dir <- "/Users/antiporta/Dropbox/712-final_project/"
+if(user.name=="mkaras") project.dir <- "/Users/mkaras/Dropbox/JHU/711-ADV_DATA_SCIENCE/712-final_project"
+if(user.name=="kuop2") project.dir <- "C:/Users/kuop2/Desktop/712-final_project"
+```
+
+
+# Read `data.frame` with package name, package first release 
+
+```{r}
+path.tmp <- file.path(project.dir, "data/pkg_first_release_SUBSET.csv")
+pkg_first_rel <- read.csv(path.tmp, stringsAsFactors = FALSE)
+pkg_first_rel$first_release <- as.Date(pkg_first_rel$first_release)
+
+## Preview
+head(pkg_first_rel)
+```
+
+
+
+# 1. Text features from package title/package description     
+### Remarks
+
+
+```{r}
+packageNames.vec <- pkg_first_rel$pkg_name
+pkg_first_rel$title <- NA
+pkg_first_rel$description <- NA
+
+t1 <- Sys.time()
+
+as.integer(length(packageNames.vec)/100)
+
+for(j in 1:as.integer(length(packageNames.vec)/100)){
+  a <- j*100-99
+  b <- j*100
+  
+  for(i in a:b){
+  package <- read_html(paste0("https://cran.r-project.org/web/packages/",
+                              packageNames.vec[i],
+                              "/"))
+
+  packagetitle1 <- package %>% 
+    html_nodes("body h2") %>%
+    html_text() %>%
+    as.character()
+  
+  packagetitle2 <- package %>% 
+    html_nodes("body p") %>%
+    html_text() %>%
+    as.character()  
+  
+  pkg_first_rel$title[i] <- packagetitle1[1]
+  pkg_first_rel$description[i] <- packagetitle2[1]  
+      
+  }
+  
+}
+
+t2 <- Sys.time()
+
+t2 - t1
+
+out.path <- file.path(project.dir, "data/pkg_text.csv")
+write.csv(pkg_first_rel, out.path, row.names = FALSE, quote = FALSE)
+
+```

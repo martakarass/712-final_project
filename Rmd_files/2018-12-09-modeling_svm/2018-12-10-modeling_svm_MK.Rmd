@@ -1,0 +1,295 @@
+---
+title: 'Modeling: linear regression'
+author: 
+- "Marta Karas"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: 
+  html_document:
+    toc: false
+    toc_depth: 3
+---
+
+
+```{r, include = FALSE}
+rm(list = ls())
+knitr::opts_chunk$set(include = TRUE, comment = NA, cache = TRUE, 
+                      message = FALSE, warning = FALSE)
+
+```
+
+* Define project folder `712-final_project` path. That is, modify `project.dir` string below; once it points to your `712-final_project` folder location, all other stuff below would work. 
+
+```{r}
+user.name <- Sys.info()[7]
+if(user.name=="antiporta") project.dir <- "/Users/antiporta/Dropbox/712-final_project/"
+if(user.name=="mkaras") project.dir <- "/Users/mkaras/Dropbox/JHU/711-ADV_DATA_SCIENCE/712-final_project/"
+
+library(caret)
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+library(fastDummies)
+library(janitor)
+```
+
+
+# Read data 
+
+```{r}
+
+out.path <- file.path(project.dir, "data/final_dfs/data_x.csv")
+x_df0 <- read.csv(out.path, stringsAsFactors = FALSE)
+# head(x_df0)
+
+out.path <- file.path(project.dir, "data/final_dfs/data_y.csv")
+y_df0 <- read.csv(out.path, stringsAsFactors = FALSE)
+# head(y_df0)
+
+```
+
+# Mutate data 
+
+### Create subset of columns of `x` data which will be used in modelling
+
+```{r}
+# apply(x_df0, 2, function(col) any(is.na(col)))
+x_df0 <- 
+  x_df0 %>% 
+  select(-pkg_name,
+         -rversion_min)
+
+names(x_df0)[apply(x_df0, 2, function(col) any(is.na(col)))]
+x_df0[is.na(x_df0)] <- 0
+names(x_df0)[apply(x_df0, 2, function(col) any(is.na(col)))]
+x_df <- x_df0
+```
+
+
+### Create dummy variables for subset of columns of `x`
+
+```{r}
+## x_df_license_group
+x_df_license_group <- x_df %>% select(license_group)
+x_df_license_group_DUMMY <- 
+  dummy_cols(x_df_license_group,
+             remove_most_frequent_dummy = TRUE) %>%
+  select(-license_group)
+x_df_license_group_DUMMY <- as.data.frame(clean_names(x_df_license_group_DUMMY))
+x_df <- cbind(x_df %>% select(-license_group),
+              x_df_license_group_DUMMY)
+
+x_df <- scale(x_df, center = TRUE, scale = TRUE)
+x_df <- as.data.frame(x_df)
+
+## Sanity check
+table(sapply(x_df, class))
+
+```
+
+### Mutate columns of `y` 
+
+```{r}
+y_df <- 
+  y_df0 %>%
+  select(-pkg_name) %>%
+  mutate(download_cnt_90d_LOG = log(download_cnt_90d),
+         download_cnt_365d_LOG = log(download_cnt_365d))
+# y_df <- scale(y_df, center = TRUE, scale = TRUE)
+y_df <- as.data.frame(y_df)
+
+```
+
+
+### Create data split 
+
+```{r}
+set.seed(56299)
+trainIndex <- createDataPartition(y_df$download_cnt_90d, 
+                                  p = 0.7, 
+                                  list = FALSE, 
+                                  times = 1)
+head(trainIndex[, 1], 100)
+mean(head(trainIndex[, 1], 100))
+
+## Define the train and test set                                  
+x_df_TRAIN <- x_df[trainIndex, ]
+x_df_TEST  <- x_df[-trainIndex, ]
+y_df_TRAIN <- y_df[trainIndex, ]
+y_df_TEST  <- y_df[-trainIndex, ]
+
+dim(x_df_TRAIN); dim(x_df_TEST)
+dim(y_df_TRAIN); dim(y_df_TEST)
+
+```
+
+
+
+# Model outcome: `download_cnt_90d_LOG`
+
+- Model-specific objects
+
+```{r}
+
+## Data 
+train_set_1 <- cbind(y_df_TRAIN %>% select(y = download_cnt_90d_LOG),
+                     x_df_TRAIN) 
+train_set_1 <- 
+  train_set_1 %>%
+  select(-starts_with("license_"))
+
+test_set_1 <- cbind(y_df_TEST %>% select(y = download_cnt_90d_LOG),
+                    x_df_TEST)
+test_set_1 <- 
+  test_set_1 %>%
+  select(-starts_with("license_"))
+
+## Model
+model_1 <- lm(data = train_set_1, formula = y ~ .)
+
+```
+
+
+### SVM fit: `svmLinear`
+
+* Continue with cv only, but use some wider grid of params.
+
+* We start with using a random parameter. Here, we use tuneLength = 10 random values.
+
+```{r model_1a, eval = FALSE}
+
+set.seed(123)
+
+train_control <- trainControl(method = "cv", 
+                              number = 10)
+
+model_1_svmLinear <- train(formula(model_1), 
+                       data = train_set_1, 
+                       method = "svmLinear",
+                       trControl = train_control,
+                       preProcess = c("center", "scale"),
+                       tuneLength = 3)
+
+res.df <- model_1_svmLinear$results
+head(res.df %>% arrange(RMSE))
+#   C      RMSE   Rsquared       MAE    RMSESD RsquaredSD      MAESD
+# 1 1 0.7817599 0.03136642 0.5006652 0.2306357 0.02454181 0.04738021
+
+```
+
+- Ok, so for linear SVM there is no more than one parameter, really :D
+
+
+### SVM fit: `svmRadial` 
+
+```{r , eval = FALSE}
+
+set.seed(123)
+
+train_control <- trainControl(method = "cv", 
+                              number = 10)
+
+t1 <- Sys.time()
+model_1_svmRadial <- train(formula(model_1), 
+                       data = train_set_1, 
+                       method = "svmRadial",
+                       trControl = train_control,
+                       preProcess = c("center", "scale"),
+                       tuneLength = 10)
+t2 <- Sys.time()
+t2 - t1
+
+res.df <- model_1_svmRadial$results
+head(res.df %>% arrange(RMSE))
+
+#         sigma    C      RMSE   Rsquared       MAE     RMSESD RsquaredSD      MAESD
+# 1 0.004280896 0.50 0.6669842 0.07081315 0.4590531 0.09755935 0.04327783 0.02444249
+# 2 0.004280896 1.00 0.6676132 0.06782853 0.4634098 0.09571234 0.04084600 0.02587064
+# 3 0.004280896 0.25 0.6686870 0.07286581 0.4568060 0.09933987 0.04652760 0.02468617
+# 4 0.004280896 2.00 0.6691872 0.06598689 0.4695027 0.09352046 0.03902073 0.02750277
+# 5 0.004280896 4.00 0.6705562 0.06793364 0.4762278 0.09079571 0.03535220 0.02904918
+# 6 0.004280896 8.00 0.6751716 0.07305942 0.4874912 0.08695206 0.03308952 0.02909055
+
+```
+
+
+- Refit above with selected params 
+
+```{r model_1_svm_fit}
+
+set.seed(123)
+
+train_control <- trainControl(method = "cv", 
+                              number = 10)
+
+tuneGrid <- expand.grid(.sigma = 0.004280896, 
+                        .C = 0.50)
+
+t1 <- Sys.time()
+model_1_svmRadial <- train(formula(model_1), 
+                       data = train_set_1, 
+                       method = "svmRadial",
+                       trControl = train_control,
+                       preProcess = c("center", "scale"),
+                       tuneGrid = tuneGrid)
+t2 <- Sys.time()
+t2 - t1
+# Time difference of 12.14971 secs
+
+res.df <- model_1_svmRadial$results
+head(res.df %>% arrange(RMSE))
+#        sigma   C      RMSE   Rsquared       MAE     RMSESD RsquaredSD      MAESD
+# 1 0.004280896 0.5 0.6669848 0.07081121 0.4590551 0.09755902 0.04327707 0.02444345
+
+model_1_svmRadial_FINAL <- model_1_svmRadial
+
+```
+
+
+### Fit to the test data 
+
+```{r model_1_svm_predict, fig.width= 6, fig.height=5}
+
+model_1_pred <- predict(model_1_svmRadial_FINAL,
+                        newdata = test_set_1[, -1])
+
+plt.df <- data.frame(pred = model_1_pred, obs = test_set_1[, 1])
+
+## plot 1 
+resid.tmp <- plt.df$obs - plt.df$pred
+SS.total      <- sum((plt.df$obs - mean(plt.df$obs))^2)
+SS.regression <- sum((plt.df$pred-mean(plt.df$obs))^2)
+SS.residual   <- sum(resid.tmp^2)
+r2.tmp <- SS.regression/SS.total
+MSE.tmp <- mean((resid.tmp)^2)
+
+ggplot(plt.df, aes(x = obs, y = pred)) + 
+  geom_point() + 
+  labs(title = paste0("Model predictions for y = log(# of downloads in 90 days) outcome on test set\n(red line: y = x)", 
+                      "\nMSE: ", round(MSE.tmp, 3),
+                      ", r^2: ", round(r2.tmp, 3)),
+       x = "observed",
+       y = "predicted") + 
+  geom_abline(intercept = 0, slope = 1, color="red", 
+              linetype="dashed", size=1.5) 
+
+
+## plot 2
+plt.df$resid <- resid.tmp
+ggplot(plt.df, aes(x = obs, y = resid.tmp)) + 
+  geom_point() + 
+  labs(title = paste0("Model residuals for y = log(# of downloads in 90 days) outcome on test set\n(red line: y = 0)", 
+                      "\nMSE: ", round(MSE.tmp, 3),
+                      ", r^2: ", round(r2.tmp, 3)),
+       x = "observed",
+       y = "residual (y - hat{y})") + 
+  geom_abline(intercept = 0, slope = 0, color="red", 
+              linetype="dashed", size=1.5) 
+
+
+```
+
+
+
+
+
+

@@ -1,0 +1,3 @@
+pkg_name,pkg_vig_any,pkg_vig_name,pkg_vig_url,words_cnt,error_msg
+icesVocab,0,NA,NA,NA,NA
+testassay,1,vignettes/GIAValidationExample.html,https://cran.r-project.org/web/packages/testassay/vignettes/GIAValidationExample.html,868,NA

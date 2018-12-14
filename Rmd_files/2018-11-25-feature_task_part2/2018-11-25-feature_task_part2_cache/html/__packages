@@ -1,0 +1,10 @@
+base
+xml2
+rvest
+ggplot2
+dplyr
+future
+readr
+stringr
+bindrcpp
+rversions

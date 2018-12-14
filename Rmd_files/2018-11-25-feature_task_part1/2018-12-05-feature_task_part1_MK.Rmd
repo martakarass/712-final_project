@@ -1,0 +1,125 @@
+---
+title: 'Features engineering: task 1'
+author: 
+- "Perry"
+- "Marta"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: 
+  html_document:
+    toc: false
+    toc_depth: 3
+---
+
+- text features from package title         
+- text features from package description      
+
+
+```{r, include = FALSE}
+rm(list = ls())
+knitr::opts_chunk$set(include = TRUE, comment = NA, cache = FALSE, 
+                      message = FALSE, warning = FALSE)
+options(stringsAsFactors=FALSE)
+
+```
+
+* Define project folder `712-final_project` path. That is, modify `project.dir` string below; once it points to your `712-final_project` folder location, all other stuff below would work. 
+
+```{r}
+
+library(rvest)
+library(ggplot2)
+library(dplyr)
+library(future)
+library(stringi)
+library(tm)
+library(tools)
+library(utils)
+library(tidytext)
+
+user.name<-Sys.info()[7]
+if(user.name=="antiporta") project.dir <- "/Users/antiporta/Dropbox/712-final_project/"
+if(user.name=="mkaras") project.dir <- "/Users/mkaras/Dropbox/JHU/711-ADV_DATA_SCIENCE/712-final_project"
+if(user.name=="kuop2") project.dir <- "C:/Users/kuop2/Desktop/712-final_project"
+```
+
+
+# Read `data.frame` with package name, package first release 
+
+```{r}
+path.tmp <- file.path(project.dir, "data/pkg_first_release_SUBSET.csv")
+pkg_first_rel <- read.csv(path.tmp, stringsAsFactors = FALSE)
+pkg_first_rel$first_release <- as.Date(pkg_first_rel$first_release)
+
+## Preview
+head(pkg_first_rel)
+```
+
+
+# Example of using tm to clean data and deal with plurals
+
+- Assume tite / description is stored in a vector 
+
+```{r}
+
+titles.vec <- 
+  c("Computing different outputs, especially the ones, which are nice, nicer of the nicest",
+    "Computation of output 100x faster than all the previous packages &^*%*&^%",
+    "The best package to compute anything out of all packages you can thinkg of!!!!!! j hdgfc 37456 37456lake")
+
+```
+
+### Create corpus: no cleaning yet done 
+
+```{r}
+
+corp <- Corpus(VectorSource(titles.vec))
+dtm1 <- DocumentTermMatrix(corp)
+
+## Function which converts DocumentTermMatrix object 
+## to a nice matrix where rows are arranged as the `titles.vec`
+## note: it uses tidytext library
+dtm2mat <- function(dtm){
+  mat <- 
+    tidy(dtm) %>% 
+    dcast(document ~ term, value.var = "count") %>% 
+    arrange(document) %>%
+    select(-document) %>%
+    mutate_all(as.numeric) %>%
+    as.matrix()
+  mat[is.na(mat)] <- 0
+  mat
+}
+
+dtm2mat(dtm1)
+
+```
+
+
+### Create corpus with cleaning (but no plural removed yet)
+
+```{r}
+corp2 <- 
+  corp %>%
+  tm_map(removePunctuation) %>%
+  tm_map(content_transformer(tolower)) %>%
+  tm_map(removeWords, c(stopwords("en"), "R")) %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(stripWhitespace)
+
+dtm2mat(DocumentTermMatrix(corp2))
+
+```
+
+### Additionally remove plurals
+
+```{r}
+corp3 <- 
+  corp2 %>%
+  tm_map(stemDocument) 
+
+dtm2mat(DocumentTermMatrix(corp3))
+
+```
+
+

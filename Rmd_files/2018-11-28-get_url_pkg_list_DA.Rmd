@@ -1,0 +1,114 @@
+---
+title: 'Get URL R packages FIRST VERSION'
+author: "Daniel Antiporta"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+---
+
+```{r, include = FALSE}
+rm(list = ls())
+knitr::opts_chunk$set(include = TRUE, comment = NA, cache = TRUE, 
+                      message = FALSE, warning = FALSE)
+
+```
+
+* Define project folder `712-final_project` path. That is, modify `project.dir` string below; once it points to your `712-final_project` folder location, all other stuff below would work. 
+
+```{r}
+user.name<-Sys.info()[7]
+if(user.name=="antiporta") project.dir <- "/Users/antiporta/Dropbox/712-final_project/"
+if(user.name=="dantipor") project.dir <- "C://Users//dantipor//Dropbox//712-final_project//"
+if(user.name=="mkaras") project.dir <- "/Users/mkaras/OneDrive - JHSPH/JHU/711-ADV_DATA_SCIENCE/712-final_project"
+```
+
+### Read `vector` with package name
+
+```{r}
+path.tmp <- file.path(project.dir, "data/pkg_name_SUBSET")
+pkg_name_vec <- dget(path.tmp)
+
+## Sanity check
+length(pkg_name_vec)
+
+## Preview
+head(pkg_name_vec)
+```
+
+### Get urls to download FIRST R Package Release
+
+```{r, eval = FALSE}
+library(rvest)
+library(ggplot2)
+library(dplyr)
+library(future)
+
+plan(multisession, workers = parallel::detectCores() - 1)
+
+t1 <- Sys.time()
+
+results.f <- lapply(1:length(pkg_name_vec), function(i) {
+  future({
+    ## Archive URL
+    name1 <- pkg_name_vec[i]
+    url1 <- 'https://cran.r-project.org/src/contrib/Archive/'
+    url2 <- paste0(url1, name1, '/')
+    ## Check if we can access Archive webpage
+    read_html_out <- tryCatch(read_html(url2), error = function(e) e) 
+    # If error was thrown on read_html attempt, package does not have archive
+    if (inherits(read_html_out, "error")) {
+      message("no archive")
+    read_html_out.i <- "https://cran.r-project.org/web/packages/"
+    read_html_out.i <-paste0(read_html_out.i, pkg_name_vec[i],"/index.html")
+    firstRelease.i <- read_html(read_html_out.i) %>%
+      html_nodes("table:nth-child(5)") %>%
+      html_table(fill = TRUE) %>%
+      as.data.frame() %>% filter(grepl("source", X1)) %>%
+      select(X2) %>% as.character()
+    firstRelease.i <-paste0("src/contrib/", firstRelease.i)
+    } else {
+    # If package does have an archive
+       tryCatch({
+          pkg_first_name_i <- 
+            read_html_out %>%
+            html_nodes("table")  %>%
+            html_table(fill = TRUE) %>%
+            as.data.frame() %>%
+            select(Name) %>% filter(Name!="", 
+              Name!="Parent Directory") %>%
+            filter(row_number()<2) %>% as.character
+          firstRelease.i <- as.character(pkg_first_name_i)
+          firstRelease.i <- paste0("src/contrib/Archive/",
+            pkg_name_vec[i], "/",
+            firstRelease.i)
+      }, error = function(e) {
+          firstRelease.i <- "NA"
+      })
+    }
+    ## Store results for this particular package name
+    list(name1, firstRelease.i)
+  })
+})
+
+results <- lapply(results.f, value)
+t2 <- Sys.time()
+t2 - t1
+
+## Process
+results.list <- lapply(results, function(ll) unlist(ll))
+results.df<-as.data.frame(cbind(sapply(results.list,`[`,1), sapply(results.list,`[`,2)))
+names(results.df) <- c("name", "pkg_first")
+results.df$pkg_first<-paste0("https://cran.r-project.org/",
+  results.df$pkg_first)
+pkg_first_release_urls<-results.df
+
+## Save data frame with pkg_name, first_release
+if(user.name=="dantipor") out.path <- file.path(project.dir, "data//pkg_first_release_urls_DA.csv")
+else{
+  out.path <- file.path(project.dir, "data/pkg_first_release_urls_DA.csv")
+}
+write.csv(pkg_first_release_urls, 
+          out.path, row.names = FALSE, quote = FALSE)
+```

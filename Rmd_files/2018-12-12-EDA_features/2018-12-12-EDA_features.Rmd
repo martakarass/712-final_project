@@ -1,0 +1,279 @@
+---
+title: 'Modeling: linear regression'
+author: 
+- "Marta Karas"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: 
+  html_document:
+    toc: false
+    toc_depth: 3
+---
+
+
+```{r, include = FALSE}
+rm(list = ls())
+knitr::opts_chunk$set(include = TRUE, comment = NA, cache = TRUE, 
+                      message = FALSE, warning = FALSE)
+
+```
+
+* Define project folder `712-final_project` path. That is, modify `project.dir` string below; once it points to your `712-final_project` folder location, all other stuff below would work. 
+
+```{r}
+user.name <- Sys.info()[7]
+if(user.name=="antiporta") project.dir <- "/Users/antiporta/Dropbox/712-final_project/"
+if(user.name=="mkaras") project.dir <- "/Users/mkaras/Dropbox/JHU/711-ADV_DATA_SCIENCE/712-final_project/"
+
+library(caret)
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+library(fastDummies)
+library(janitor)
+```
+
+
+# Read data 
+
+```{r}
+
+out.path <- file.path(project.dir, "data/final_dfs/data_x.csv")
+x_df0 <- read.csv(out.path, stringsAsFactors = FALSE)
+# head(x_df0)
+
+out.path <- file.path(project.dir, "data/final_dfs/data_y.csv")
+y_df0 <- read.csv(out.path, stringsAsFactors = FALSE)
+# head(y_df0)
+
+```
+
+# Mutate data 
+
+### Create subset of columns of `x` data which will be used in modelling
+
+```{r}
+# apply(x_df0, 2, function(col) any(is.na(col)))
+x_df0 <- 
+  x_df0 %>% 
+  select(-pkg_name,
+         -rversion_min)
+
+names(x_df0)[apply(x_df0, 2, function(col) any(is.na(col)))]
+x_df0[is.na(x_df0)] <- 0
+names(x_df0)[apply(x_df0, 2, function(col) any(is.na(col)))]
+x_df <- x_df0
+```
+
+
+### Create dummy variables for subset of columns of `x`
+
+```{r}
+## x_df_license_group
+x_df_license_group <- x_df %>% select(license_group)
+x_df_license_group_DUMMY <- 
+  dummy_cols(x_df_license_group,
+             remove_most_frequent_dummy = TRUE) %>%
+  select(-license_group)
+x_df_license_group_DUMMY <- as.data.frame(clean_names(x_df_license_group_DUMMY))
+x_df <- cbind(x_df %>% select(-license_group),
+              x_df_license_group_DUMMY)
+# x_df <- scale(x_df, center = TRUE, scale = TRUE)
+x_df <- as.data.frame(x_df)
+
+## Sanity check
+table(sapply(x_df, class))
+
+```
+
+### Mutate columns of `y` 
+
+```{r}
+y_df <- 
+  y_df0 %>%
+  select(-pkg_name) %>%
+  mutate(download_cnt_90d_LOG = log(download_cnt_90d),
+         download_cnt_365d_LOG = log(download_cnt_365d))
+# y_df <- scale(y_df, center = TRUE, scale = TRUE)
+y_df <- as.data.frame(y_df)
+
+```
+
+
+# Package documentation and vignette explored
+
+- any vignette
+
+```{r EDA_vignette_cnt, fig.width=8, fig.height=4}
+
+data_df <- cbind(y_df, x_df)
+gg.base_size <- 12
+
+round(mean(data_df$vignette_any) * 100, 2)
+
+data_df$var <- factor(as.character(data_df$vignette_any), 
+                      levels = c(1,0),
+                      labels = c("Yes", "No"))
+
+tbl <- table((data_df  %>% filter(vignette_any == 1))$vignette_cnt)
+tbl / sum(tbl)
+
+ggplot(data = data_df  %>% filter(vignette_any == 1), 
+       aes(x = vignette_cnt)) +
+  scale_fill_manual(values = c("green", "grey")) + 
+  geom_bar(color = "black", alpha = 0.6) + 
+  theme_bw(base_size = gg.base_size) + 
+  labs(title = "Barplot of packages count\n(limited to packages with at least one vignette)",
+       x = "# of vignettes per package",
+       y = "packages count") + 
+  theme(legend.position = "none") + 
+  scale_x_continuous(breaks = 1:max(data_df$vignette_cnt))
+
+```
+
+
+- any vignette vs log number of downloads 
+
+```{r EDA_vignette_cnt_vs_downloads, fig.width=5.5, fig.height=4}
+
+
+data_df$vars <- factor(as.character(data_df$vignette_any), 
+                      levels = c(1,0),
+                      labels = c("Yes", "No"))
+
+ggplot(data_df,
+       aes(x = vars, 
+           y = download_cnt_365d_LOG,
+           group = vars,
+           fill = vars)) +
+  scale_fill_manual(values = c("green", "grey")) + 
+  geom_boxplot(color = "black", alpha = 0.6) + 
+  theme_bw(base_size = gg.base_size) + 
+  labs(title = "Boxplot of log(# of downloads over 1y) of packages\nstratified by whether or not\na package has a vignette",
+       x = "Has any vignette?",
+       y = "log(# of downloads over 1y)") + 
+  theme(legend.position = "none") 
+
+```
+
+
+- vignette_words_cnt_median
+
+```{r EDA_vignette_words_cnt_median, fig.width=6, fig.height=5}
+
+
+summary((data_df  %>% filter(vignette_any == 1))$vignette_words_cnt_median)
+
+ggplot(data = data_df  %>% filter(vignette_any == 1), 
+       aes(x = "", 
+           y = vignette_words_cnt_median)) +
+  geom_boxplot(color = "black", alpha = 0.6) + 
+  theme_grey(base_size = gg.base_size) + 
+  labs(title = "Boxplot of number of words (>= 3 letters) in vignette\n(median value across all vignettes,\nif package has >1 vignette))",
+       x = "",
+       y = "number of words (>= 3 letters) in vignette") + 
+  theme(legend.position = "none") 
+
+```
+
+
+# Code features explored
+
+```{r EDA_directory_present, fig.width=6, fig.height=4}
+
+gg.base_size <- 12
+
+data_df.agg <- 
+  data_df %>%
+  select(testthat_dir_present,
+         demo_dir_present,
+         src_dir_present) %>%
+  summarise_all(mean)
+data_df.agg.m <- 
+  melt(data_df.agg) %>%
+  arrange(value)
+data_df.agg.m$variable <- 
+  factor(as.character(data_df.agg.m$variable),
+         levels = c("demo_dir_present", "src_dir_present", "testthat_dir_present"),
+         labels = c("demo directory present", "src directory present", "testthat directory present"))
+
+
+ggplot(data_df.agg.m,
+       aes(x = variable, y = value, fill = variable)) +
+  geom_bar(stat="identity", color = "black", alpha = 0.6) + 
+  theme_bw(base_size = gg.base_size) + 
+  labs(title = "Barplot of packages percentage with\nparticular dir folders present",
+       x = "",
+       y = "packages percentage") + 
+  theme(legend.position = "none")  + 
+  scale_y_continuous(labels = scales::percent)
+
+```
+
+
+```{r EDA_dirs_vs_downloads, fig.width=4.9, fig.height=4.5}
+
+data_df$vars <- factor(as.character(data_df$demo_dir_present), 
+                      levels = c(1,0),
+                      labels = c("Yes", "No"))
+
+ggplot(data_df,
+       aes(x = vars, 
+           y = download_cnt_365d_LOG,
+           group = vars,
+           fill = vars)) +
+  scale_fill_manual(values = c("green", "grey")) + 
+  geom_boxplot(color = "black", alpha = 0.6) + 
+  theme_bw(base_size = gg.base_size) + 
+  labs(title = "Boxplot of log(# of downloads over 1y)",
+       x = "Has demo directory?",
+       y = "log(# of downloads over 1y)") + 
+  theme(legend.position = "none") + 
+    coord_cartesian(ylim = c(6.2, 14))
+
+
+data_df$vars <- factor(as.character(data_df$src_dir_present), 
+                      levels = c(1,0),
+                      labels = c("Yes", "No"))
+
+ggplot(data_df,
+       aes(x = vars, 
+           y = download_cnt_365d_LOG,
+           group = vars,
+           fill = vars)) +
+  scale_fill_manual(values = c("green", "grey")) + 
+  geom_boxplot(color = "black", alpha = 0.6) + 
+  theme_bw(base_size = gg.base_size) + 
+  labs(title = "Boxplot of log(# of downloads over 1y)",
+       x = "Has src directory?",
+       y = "log(# of downloads over 1y)") + 
+  theme(legend.position = "none") + 
+    coord_cartesian(ylim = c(6.2, 14))
+
+
+data_df$vars <- factor(as.character(data_df$testthat_dir_present), 
+                      levels = c(1,0),
+                      labels = c("Yes", "No"))
+
+ggplot(data_df,
+       aes(x = vars, 
+           y = download_cnt_365d_LOG,
+           group = vars,
+           fill = vars)) +
+  scale_fill_manual(values = c("green", "grey")) + 
+  geom_boxplot(color = "black", alpha = 0.6) + 
+  theme_bw(base_size = gg.base_size) + 
+  labs(title = "Boxplot of log(# of downloads over 1y)",
+       x = "Has testthat directory?",
+       y = "log(# of downloads over 1y)") + 
+  theme(legend.position = "none") + 
+    coord_cartesian(ylim = c(6.2, 14))
+  
+
+```
+
+
+
+
+
+
+

@@ -1,0 +1,236 @@
+---
+title: 'Modeling: support vector machine'
+author: 
+- "Perry Kuo"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: 
+  html_document:
+    toc: false
+    toc_depth: 3
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+```{r, include = FALSE}
+rm(list = ls())
+knitr::opts_chunk$set(include = TRUE, comment = NA, cache = TRUE, 
+                      message = FALSE, warning = FALSE)
+
+```
+
+* Define project folder `712-final_project` path. That is, modify `project.dir` string below; once it points to your `712-final_project` folder location, all other stuff below would work. 
+
+```{r}
+user.name <- Sys.info()[7]
+if(user.name=="antiporta") project.dir <- "/Users/antiporta/Dropbox/712-final_project/"
+if(user.name=="mkaras") project.dir <- "/Users/mkaras/Dropbox/JHU/711-ADV_DATA_SCIENCE/712-final_project/"
+if(user.name=="kuop2") project.dir <- "C:/Users/kuop2/Desktop/712-final_project"
+if(user.name=="pkuo6") project.dir <- "C:/Users/pkuo6/Desktop/712-final_project"
+
+library(caret)
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+library(fastDummies)
+library(janitor)
+library(e1071)
+library(kableExtra)
+```
+
+
+# Read data 
+
+```{r}
+
+out.path <- file.path(project.dir, "data/final_dfs/data_x.csv")
+x_df0 <- read.csv(out.path, stringsAsFactors = FALSE)
+# head(x_df0)
+
+out.path <- file.path(project.dir, "data/final_dfs/data_y.csv")
+y_df0 <- read.csv(out.path, stringsAsFactors = FALSE)
+# head(y_df0)
+
+```
+
+# Mutate data 
+
+### Create subset of columns of `x` data which will be used in modelling
+
+```{r}
+# apply(x_df0, 2, function(col) any(is.na(col)))
+x_df0 <- 
+  x_df0 %>% 
+  select(-pkg_name,
+         -rversion_min)
+
+names(x_df0)[apply(x_df0, 2, function(col) any(is.na(col)))]
+x_df0[is.na(x_df0)] <- 0
+names(x_df0)[apply(x_df0, 2, function(col) any(is.na(col)))]
+x_df <- x_df0
+```
+
+
+### Create dummy variables for subset of columns of `x`
+
+```{r}
+## x_df_license_group
+x_df_license_group <- x_df %>% select(license_group)
+x_df_license_group_DUMMY <- 
+  dummy_cols(x_df_license_group,
+             remove_most_frequent_dummy = TRUE) %>%
+  select(-license_group)
+x_df_license_group_DUMMY <- as.data.frame(clean_names(x_df_license_group_DUMMY))
+x_df <- cbind(x_df %>% select(-license_group),
+              x_df_license_group_DUMMY)
+x_df <- scale(x_df, center = TRUE, scale = TRUE)
+x_df <- as.data.frame(x_df)
+
+## Sanity check
+table(sapply(x_df, class))
+
+```
+
+### Mutate columns of `y` 
+
+```{r}
+y_df <- 
+  y_df0 %>%
+  select(-pkg_name) %>%
+  mutate(download_cnt_90d_LOG = log(download_cnt_90d),
+         download_cnt_365d_LOG = log(download_cnt_365d))
+# y_df <- scale(y_df, center = TRUE, scale = TRUE)
+y_df <- as.data.frame(y_df)
+
+```
+
+
+### Create data split 
+
+```{r}
+set.seed(56299)
+trainIndex <- createDataPartition(y_df$download_cnt_90d, 
+                                  p = 0.7, 
+                                  list = FALSE, 
+                                  times = 1)
+head(trainIndex[, 1], 100)
+mean(head(trainIndex[, 1], 100))
+
+## Define the train and test set                                  
+x_df_TRAIN <- x_df[trainIndex, ]
+x_df_TEST  <- x_df[-trainIndex, ]
+y_df_TRAIN <- y_df[trainIndex, ]
+y_df_TEST  <- y_df[-trainIndex, ]
+
+dim(x_df_TRAIN); dim(x_df_TEST)
+dim(y_df_TRAIN); dim(y_df_TEST)
+
+```
+
+
+
+# Quickly explore the data 
+
+```{r}
+x_df.cor <- as.data.frame(cor(x_df))
+x_df.cor$var1 <- rownames(x_df.cor)
+x_df.cor <- x_df.cor %>% melt(id.vars = "var1")
+## Create label 
+x_df.cor_names_sorted <- as.data.frame(t(apply(x_df.cor[, 1:2], 1, sort))) 
+x_df.cor_label <- paste0(x_df.cor_names_sorted[, 1], "_", x_df.cor_names_sorted[, 2])
+x_df.cor$label <- x_df.cor_label
+## Discard duplicates
+x_df.cor.FINAL <- 
+  x_df.cor %>%
+  filter(var1 != variable) %>%
+  select(label, value) %>%
+  distinct() %>%
+  arrange(desc(abs(value)))
+
+boxplot(x_df.cor.FINAL$value, main = "Boxplot of correlation values")
+
+```
+
+
+# Model outcome: `download_cnt_90d_LOG`
+
+- Model-specific objects
+
+```{r}
+
+## Data 
+train_set_1 <- cbind(y_df_TRAIN %>% select(y = download_cnt_90d_LOG),
+                     x_df_TRAIN)
+train_set_1 <- cbind(y_df_TRAIN %>% select(y = download_cnt_90d_LOG),
+                     x_df_TRAIN) %>%
+                select(-license_group_epl, 
+                       -license_group_acm,
+                       -license_group_file_license,
+                       -license_group_bsl,
+                       -license_group_unlimited)
+test_set_1 <- cbind(y_df_TEST %>% select(y = download_cnt_90d_LOG),
+                    x_df_TEST)
+
+## Control object
+train_control <- trainControl(method = "repeatedcv", 
+                              number = 10,
+                              repeats = 10)
+
+## svm problem: 
+#???These variables have zero variances: license_group_epl, license_group_acm, license_group_file_licenseVariable(s) `' constant. Cannot scale data.
+# These variables have zero variances: license_group_acm, license_group_file_licenseVariable(s) `' constant. Cannot scale data. 
+# These variables have zero variances: license_group_acm, license_group_file_licenseVariable(s) `' constant. Cannot scale data.
+# > sd(train_set_1$license_group_acm)
+# [1] 0
+# > mean(train_set_1$license_group_acm)
+# [1] -0.02073903
+# > head(train_set_1$license_group_acm)
+# [1] -0.02073903 -0.02073903 -0.02073903 -0.02073903 -0.02073903 -0.02073903
+t1 <- Sys.time()
+## First model Model
+svm_Linear01 <- train(y ~ . , data = train_set_1, 
+                    method = "svmLinear",
+                    preProcess = c("center"),
+                    trControl=train_control)
+
+svm_Linear01$results
+#   C      RMSE   Rsquared       MAE   RMSESD RsquaredSD     MAESD
+# 1 1 0.9079692 0.03678916 0.5152176 1.096092 0.03003147 0.1008808
+t2 <- Sys.time()
+
+t3 <- Sys.time()
+
+svm_Linear200 <- train(y ~ . , data = train_set_1, 
+                    method = "svmLinear",
+                    preProcess = c("center"),
+                    trControl=train_control,
+                    tunelength = 200) 
+t4 <- Sys.time()
+# > svm_Linear200$results
+#   C     RMSE   Rsquared      MAE  RMSESD RsquaredSD     MAESD
+# 1 1 0.862489 0.03614399 0.509135 1.03422 0.02629914 0.1001996
+# Take longer time with small improvement
+
+t5 <- Sys.time()
+
+grid <- expand.grid(C = 2^(0:9))
+svm_Linear_grid <- train(y ~ . , data = train_set_1, 
+                    method = "svmLinear",
+                    preProcess = c("center"),
+                    tuneGrid = grid,
+                    trControl=train_control,tunelength = 200) 
+t6 <- Sys.time()
+
+svm_Linear_grid$results %>% 
+  arrange(desc(-RMSE)) %>%
+  kable() %>%
+  kable_styling()
+
+t2-t1
+t4-t3
+t6-t5
+
+```
+
+
+

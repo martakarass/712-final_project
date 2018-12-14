@@ -1,0 +1,691 @@
+---
+title: 'Modeling: linear regression'
+author: 
+- "Marta Karas"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: 
+  html_document:
+    toc: false
+    toc_depth: 3
+---
+
+
+```{r, include = FALSE}
+rm(list = ls())
+knitr::opts_chunk$set(include = TRUE, comment = NA, cache = TRUE, 
+                      message = FALSE, warning = FALSE)
+
+```
+
+* Define project folder `712-final_project` path. That is, modify `project.dir` string below; once it points to your `712-final_project` folder location, all other stuff below would work. 
+
+```{r}
+user.name <- Sys.info()[7]
+if(user.name=="antiporta") project.dir <- "/Users/antiporta/Dropbox/712-final_project/"
+if(user.name=="mkaras") project.dir <- "/Users/mkaras/Dropbox/JHU/711-ADV_DATA_SCIENCE/712-final_project/"
+
+library(caret)
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+library(fastDummies)
+library(janitor)
+```
+
+
+# Read data 
+
+```{r}
+
+out.path <- file.path(project.dir, "data/final_dfs/data_x.csv")
+x_df0 <- read.csv(out.path, stringsAsFactors = FALSE)
+# head(x_df0)
+
+out.path <- file.path(project.dir, "data/final_dfs/data_y.csv")
+y_df0 <- read.csv(out.path, stringsAsFactors = FALSE)
+# head(y_df0)
+
+```
+
+# Mutate data 
+
+### Create subset of columns of `x` data which will be used in modelling
+
+```{r}
+# apply(x_df0, 2, function(col) any(is.na(col)))
+x_df0 <- 
+  x_df0 %>% 
+  select(-pkg_name,
+         -rversion_min)
+
+names(x_df0)[apply(x_df0, 2, function(col) any(is.na(col)))]
+x_df0[is.na(x_df0)] <- 0
+names(x_df0)[apply(x_df0, 2, function(col) any(is.na(col)))]
+x_df <- x_df0
+```
+
+
+### Create dummy variables for subset of columns of `x`
+
+```{r}
+## x_df_license_group
+x_df_license_group <- x_df %>% select(license_group)
+x_df_license_group_DUMMY <- 
+  dummy_cols(x_df_license_group,
+             remove_most_frequent_dummy = TRUE) %>%
+  select(-license_group)
+x_df_license_group_DUMMY <- as.data.frame(clean_names(x_df_license_group_DUMMY))
+x_df <- cbind(x_df %>% select(-license_group),
+              x_df_license_group_DUMMY)
+x_df <- scale(x_df, center = TRUE, scale = TRUE)
+x_df <- as.data.frame(x_df)
+
+## Sanity check
+table(sapply(x_df, class))
+
+```
+
+### Mutate columns of `y` 
+
+```{r}
+y_df <- 
+  y_df0 %>%
+  select(-pkg_name) %>%
+  mutate(download_cnt_90d_LOG = log(download_cnt_90d),
+         download_cnt_365d_LOG = log(download_cnt_365d))
+# y_df <- scale(y_df, center = TRUE, scale = TRUE)
+y_df <- as.data.frame(y_df)
+
+```
+
+
+### Create data split 
+
+```{r}
+set.seed(56299)
+trainIndex <- createDataPartition(y_df$download_cnt_90d, 
+                                  p = 0.7, 
+                                  list = FALSE, 
+                                  times = 1)
+head(trainIndex[, 1], 100)
+mean(head(trainIndex[, 1], 100))
+
+## Define the train and test set                                  
+x_df_TRAIN <- x_df[trainIndex, ]
+x_df_TEST  <- x_df[-trainIndex, ]
+y_df_TRAIN <- y_df[trainIndex, ]
+y_df_TEST  <- y_df[-trainIndex, ]
+
+dim(x_df_TRAIN); dim(x_df_TEST)
+dim(y_df_TRAIN); dim(y_df_TEST)
+
+```
+
+
+
+# Quickly explore the data 
+
+```{r}
+x_df.cor <- as.data.frame(cor(x_df))
+x_df.cor$var1 <- rownames(x_df.cor)
+x_df.cor <- x_df.cor %>% melt(id.vars = "var1")
+## Create label 
+x_df.cor_names_sorted <- as.data.frame(t(apply(x_df.cor[, 1:2], 1, sort))) 
+x_df.cor_label <- paste0(x_df.cor_names_sorted[, 1], "_", x_df.cor_names_sorted[, 2])
+x_df.cor$label <- x_df.cor_label
+## Discard duplicates
+x_df.cor.FINAL <- 
+  x_df.cor %>%
+  filter(var1 != variable) %>%
+  select(label, value) %>%
+  distinct() %>%
+  arrange(desc(abs(value)))
+
+boxplot(x_df.cor.FINAL$value, main = "Boxplot of correlation values")
+
+```
+
+
+# Model outcome: `download_cnt_90d_LOG`
+
+- Model-specific objects
+
+```{r}
+
+## Data 
+train_set_1 <- cbind(y_df_TRAIN %>% select(y = download_cnt_90d_LOG),
+                     x_df_TRAIN)
+test_set_1 <- cbind(y_df_TEST %>% select(y = download_cnt_90d_LOG),
+                    x_df_TEST)
+
+## Control object
+train_control <- trainControl(method = "repeatedcv", 
+                              number = 10,
+                              repeats = 10)
+## Model
+model_1 <- lm(data = train_set_1, formula = y ~ .)
+
+```
+
+
+### lasso for parameters estimation in GLM
+
+- Model parameters estimation method-specific objects
+
+```{r model_1a, eval = FALSE}
+
+set.seed(123)
+
+## Grid of parameters
+lambda.vec <- exp(seq(-5, 3, by = 0.05))
+range(lambda.vec)
+tuneGrid <- expand.grid(.alpha = 1, 
+                        .lambda = lambda.vec)
+
+## Train model
+model_1_fit_lasso <- train(formula(model_1), 
+                            data = train_set_1, 
+                            method = "glmnet", 
+                            trControl = train_control,
+                            tuneGrid = tuneGrid)
+
+## Root Mean Squared Error (RMSE) 
+res.df <- model_1_fit_lasso$results
+head(res.df %>% arrange(RMSE))
+#   alpha     lambda      RMSE   Rsquared       MAE     RMSESD
+# 1     1 0.02872464 0.6627854 0.07133483 0.4655100 0.09104980
+# 2     1 0.02732372 0.6628024 0.07109021 0.4655045 0.09089917
+# 3     1 0.03019738 0.6628165 0.07157673 0.4655239 0.09119916
+# 4     1 0.02599113 0.6628775 0.07080775 0.4655306 0.09076019
+# 5     1 0.03174564 0.6629004 0.07177825 0.4655405 0.09134245
+# 6     1 0.02472353 0.6629981 0.07054467 0.4655826 0.09061407
+
+```
+
+- tune attempt (use different grid)
+
+```{r model_1a_B, eval = FALSE}
+
+set.seed(123)
+
+lambda.vec <-  exp(seq(-10, -4, by = 0.05))
+range(lambda.vec)
+
+## Grid of parameters
+tuneGrid <- expand.grid(.alpha = 1, 
+                        .lambda = lambda.vec)
+
+## Train model
+model_1_fit_lasso <- train(formula(model_1), 
+                            data = train_set_1, 
+                            method = "glmnet", 
+                            trControl = train_control,
+                            tuneGrid = tuneGrid)
+
+## Root Mean Squared Error (RMSE) 
+res.df <- model_1_fit_lasso$results
+head(res.df %>% arrange(RMSE))
+#   alpha     lambda      RMSE   Rsquared       MAE     RMSESD
+# 1     1 0.01831564 0.6658118 0.06750184 0.4673152 0.09139323
+# 2     1 0.01742237 0.6665287 0.06709490 0.4677941 0.09175282
+# 3     1 0.01657268 0.6673934 0.06666159 0.4683814 0.09217387
+# 4     1 0.01576442 0.6683779 0.06622555 0.4690692 0.09270084
+# 5     1 0.01499558 0.6696090 0.06570827 0.4698668 0.09334616
+# 6     1 0.01426423 0.6710942 0.06507899 0.4707247 0.09401236
+
+
+
+```
+
+
+- tune attempt (use different grid)
+
+```{r model_1a_C}
+
+set.seed(123)
+
+lambda.vec <-  exp(seq(-5, -2, by = 0.05))
+range(lambda.vec)
+
+## Grid of parameters
+tuneGrid <- expand.grid(.alpha = 1, 
+                        .lambda = lambda.vec)
+
+## Train model
+model_1_fit_lasso <- train(formula(model_1), 
+                            data = train_set_1, 
+                            method = "glmnet", 
+                            trControl = train_control,
+                            tuneGrid = tuneGrid)
+
+## Root Mean Squared Error (RMSE) 
+res.df <- model_1_fit_lasso$results
+head(res.df %>% arrange(RMSE))
+#   alpha     lambda      RMSE   Rsquared       MAE     RMSESD
+# 1     1 0.02872464 0.6627854 0.07133483 0.4655100 0.09104980
+# 2     1 0.02732372 0.6628024 0.07109021 0.4655045 0.09089917
+# 3     1 0.03019738 0.6628165 0.07157673 0.4655239 0.09119916
+# 4     1 0.02599113 0.6628775 0.07080775 0.4655306 0.09076019
+# 5     1 0.03174564 0.6629004 0.07177825 0.4655405 0.09134245
+# 6     1 0.02472353 0.6629981 0.07054467 0.4655826 0.09061407
+
+model_1_fit_lasso_F <- model_1_fit_lasso
+
+```
+
+
+### See the coefficients
+
+```{r}
+
+model_1_coef <- coef(model_1_fit_lasso_F$finalModel, model_1_fit_lasso_F$bestTune$lambda)
+model_1_coef <- as.matrix(model_1_coef)
+model_1_coef.df <- data.frame(var = rownames(model_1_coef),
+                              coef = model_1_coef[, 1], 
+                              stringsAsFactors = FALSE)
+model_1_coef.df <- 
+  model_1_coef.df %>%
+  filter(var != "(Intercept)")
+rownames(model_1_coef.df) <- NULL
+
+```
+
+
+### Fit to the test data 
+
+```{r model_lm_download_cnt_90d_LOG, fig.width= 5, fig.height=5}
+model_1_pred <- predict(model_1_fit_lasso_F,
+                        newdata = test_set_1[, -1])
+
+plt.df <- data.frame(pred = model_1_pred, obs = test_set_1[, 1])
+
+## plot 1 
+resid.tmp <- plt.df$obs - plt.df$pred
+SS.total      <- sum((plt.df$obs - mean(plt.df$obs))^2)
+SS.regression <- sum((plt.df$pred-mean(plt.df$obs))^2)
+SS.residual   <- sum(resid.tmp^2)
+r2.tmp <- SS.regression/SS.total
+MSE.tmp <- mean((resid.tmp)^2)
+
+# ggplot(plt.df, aes(x = obs, y = pred)) + 
+#   geom_point(alpha = 0.7) + 
+#   labs(title = paste0("Model predictions of log(# of downloads in 90 days)\n(red line: y = x)", 
+#                       "\nMSE: ", round(MSE.tmp, 3),
+#                       "\nsr^2: ", round(r2.tmp, 3)),
+#        x = "observed",
+#        y = "predicted") + 
+#   geom_abline(intercept = 0, slope = 1, color="red", 
+#               linetype="dashed", size=1) 
+# 
+# 
+# ## plot 2
+# plt.df$resid <- resid.tmp
+# ggplot(plt.df, aes(x = obs, y = resid.tmp)) + 
+#   geom_point(alpha = 0.7) + 
+#   labs(title = paste0("Model residuals for y = log(# of downloads in 90 days)\n(red line: y = 0)", 
+#                       "\nMSE: ", round(MSE.tmp, 3),
+#                       "\nr^2: ", round(r2.tmp, 3)),
+#        x = "observed",
+#        y = "residual (y - hat{y})") + 
+#   geom_abline(intercept = 0, slope = 0, color="red", 
+#               linetype="dashed", size=1.5) 
+
+## plot 1
+ggplot(plt.df, aes(x = obs, y = pred)) +
+  geom_point(alpha = 0.7) +
+  labs(title = paste0("Predictions of log(# of downloads in 3m)",
+                      "\nMSE: ", round(MSE.tmp, 3),
+                      "\nr^2: ", round(r2.tmp, 3)),
+       x = "observed",
+       y = "predicted") +
+  geom_abline(intercept = 0, slope = 1, color="red",
+              linetype="dashed", size=1.5) +
+  theme_gray(base_size = 12)
+
+
+## plot 2
+plt.df$resid <- resid.tmp
+ggplot(plt.df, aes(x = obs, y = resid.tmp)) +
+  geom_point(alpha = 0.7) +
+  labs(title = paste0("Prediction resuduals for log(# of downloads in 3m)",
+                      "\nMSE: ", round(MSE.tmp, 3),
+                      "\nr^2: ", round(r2.tmp, 3)),
+       x = "observed",
+       y = "residual (y - hat{y})") +
+  geom_abline(intercept = 0, slope = 0, color="red",
+              linetype="dashed", size=1.5) +
+  theme_gray(base_size = 12)
+
+```
+
+
+
+# Model outcome: `download_cnt_365d_LOG`
+
+- Model-specific objects
+
+```{r}
+
+## Data 
+train_set_2 <- cbind(y_df_TRAIN %>% select(y = download_cnt_365d_LOG),
+                     x_df_TRAIN)
+test_set_2 <- cbind(y_df_TEST %>% select(y = download_cnt_365d_LOG),
+                    x_df_TEST)
+
+## Control object
+train_control <- trainControl(method = "repeatedcv", 
+                              number = 10,
+                              repeats = 10)
+## Model
+model_2 <- lm(data = train_set_2, formula = y ~ .)
+
+```
+
+
+### lasso for parameters estimation in GLM
+
+- Model parameters estimation method-specific objects
+
+```{r model_2a, eval = FALSE}
+
+set.seed(123)
+
+## Grid of parameters
+lambda.vec <- exp(seq(-5, 3, by = 0.05))
+range(lambda.vec)
+tuneGrid <- expand.grid(.alpha = 1, 
+                        .lambda = lambda.vec)
+
+## Train model
+model_2_fit_lasso <- train(formula(model_2), 
+                            data = train_set_2, 
+                            method = "glmnet", 
+                            trControl = train_control,
+                            tuneGrid = tuneGrid)
+
+## Root Mean Squared Error (RMSE) 
+res.df <- model_2_fit_lasso$results
+head(res.df %>% arrange(RMSE))
+#   alpha     lambda      RMSE  Rsquared       MAE    RMSESD RsquaredSD
+# 1     1 0.02472353 0.7752640 0.1339603 0.5081112 0.1022190 0.05275283
+# 2     1 0.02599113 0.7752699 0.1338939 0.5079708 0.1023452 0.05298551
+# 3     1 0.02732372 0.7753352 0.1337668 0.5078304 0.1024790 0.05314877
+# 4     1 0.02351775 0.7753427 0.1339133 0.5082823 0.1020742 0.05245405
+# 5     1 0.02872464 0.7754644 0.1335730 0.5077126 0.1026074 0.05327894
+# 6     1 0.02237077 0.7754933 0.1337808 0.5085078 0.1019083 0.05211717
+
+```
+
+- tune attempt (use different grid)
+
+- Model parameters estimation method-specific objects
+
+```{r model_2b}
+
+set.seed(123)
+
+## Grid of parameters
+lambda.vec <- exp(seq(-5, -2, by = 0.05))
+range(lambda.vec)
+tuneGrid <- expand.grid(.alpha = 1, 
+                        .lambda = lambda.vec)
+
+## Train model
+model_2_fit_lasso <- train(formula(model_2), 
+                            data = train_set_2, 
+                            method = "glmnet", 
+                            trControl = train_control,
+                            tuneGrid = tuneGrid)
+
+## Root Mean Squared Error (RMSE) 
+res.df <- model_2_fit_lasso$results
+head(res.df %>% arrange(RMSE))
+#   alpha     lambda      RMSE  Rsquared       MAE    RMSESD RsquaredSD
+# 1     1 0.02472353 0.7752640 0.1339603 0.5081112 0.1022190 0.05275283
+# 2     1 0.02599113 0.7752699 0.1338939 0.5079708 0.1023452 0.05298551
+# 3     1 0.02732372 0.7753352 0.1337668 0.5078304 0.1024790 0.05314877
+# 4     1 0.02351775 0.7753427 0.1339133 0.5082823 0.1020742 0.05245405
+# 5     1 0.02872464 0.7754644 0.1335730 0.5077126 0.1026074 0.05327894
+# 6     1 0.02237077 0.7754933 0.1337808 0.5085078 0.1019083 0.05211717
+
+
+model_2_fit_lasso_F <- model_2_fit_lasso
+
+
+```
+
+
+
+### See the coefficients
+
+```{r}
+
+model_2_coef <- coef(model_2_fit_lasso_F$finalModel, model_2_fit_lasso_F$bestTune$lambda)
+model_2_coef <- as.matrix(model_2_coef)
+model_2_coef.df <- data.frame(var = rownames(model_2_coef),
+                              coef = model_2_coef[, 1], 
+                              stringsAsFactors = FALSE)
+model_2_coef.df <- 
+  model_2_coef.df %>%
+  filter(var != "(Intercept)")
+rownames(model_2_coef.df) <- NULL
+
+# model_2_coef.df
+```
+
+
+### Fit to the test data 
+
+```{r model_lm_download_cnt_365d_LOG, fig.width=5, fig.height=5}
+model_2_pred <- predict(model_2_fit_lasso_F,
+                        newdata = test_set_2[, -1])
+
+plt.df <- data.frame(pred = model_2_pred, obs = test_set_2[, 1])
+
+## plot 1 
+resid.tmp <- plt.df$obs - plt.df$pred
+SS.total      <- sum((plt.df$obs - mean(plt.df$obs))^2)
+SS.regression <- sum((plt.df$pred-mean(plt.df$obs))^2)
+SS.residual   <- sum(resid.tmp^2)
+r2.tmp <- SS.regression/SS.total
+MSE.tmp <- mean((resid.tmp)^2)
+
+
+# ## plot 1
+# ggplot(plt.df, aes(x = obs, y = pred)) + 
+#   geom_point(alpha = 0.7) + 
+#   labs(title = paste0("Model predictions of log(# of downloads in 1y)\n(red line: y = x)", 
+#                       "\nMSE: ", round(MSE.tmp, 3),
+#                       "\nsr^2: ", round(r2.tmp, 3)),
+#        x = "observed",
+#        y = "predicted") + 
+#   geom_abline(intercept = 0, slope = 1, color="red", 
+#               linetype="dashed", size=1) 
+# 
+# 
+# ## plot 2
+# plt.df$resid <- resid.tmp
+# ggplot(plt.df, aes(x = obs, y = resid.tmp)) + 
+#   geom_point(alpha = 0.7) + 
+#   labs(title = paste0("Model residuals for y = log(# of downloads in 1y days)\n(red line: y = 0)", 
+#                       "\nMSE: ", round(MSE.tmp, 3),
+#                       "\nr^2: ", round(r2.tmp, 3)),
+#        x = "observed",
+#        y = "residual (y - hat{y})") + 
+#   geom_abline(intercept = 0, slope = 0, color="red", 
+#               linetype="dashed", size=1.5) 
+
+
+# ## plot 1
+# ggplot(plt.df, aes(x = obs, y = pred)) +
+#   geom_point(alpha = 0.7) +
+#   labs(title = paste0("Predictions of log(# of downloads in 1y)",
+#                       "\nMSE: ", round(MSE.tmp, 3),
+#                       "\nr^2: ", round(r2.tmp, 3)),
+#        x = "observed",
+#        y = "predicted") +
+#   geom_abline(intercept = 0, slope = 1, color="red",
+#               linetype="dashed", size=1.5) +
+#   theme_gray(base_size = 12)
+
+ggplot(plt.df, aes(x = obs, y = pred)) + 
+  geom_point(alpha = 0.7) + 
+  labs(title = paste0("Predictions for y = log(# of downloads in 1y)"),
+  	   subtitle= bquote("MSE: "~ .(round(MSE.tmp, 3))~
+  	                      ","~r^{2}~": "~ .(round(r2.tmp, 3))),
+       # caption = paste0("Model: ", (gsub("model360_", "", names(plt.df.360[i])))),
+       x = "observed",
+       y = "predicted") + 
+  geom_abline(intercept = 0, slope = 1, color="red", 
+              linetype="dashed", size=1.5) + 
+  theme_gray(base_size = 12)
+
+
+## plot 2
+plt.df$resid <- resid.tmp
+
+ggplot(plt.df, aes(x = obs, y = resid)) + 
+  geom_point(alpha = 0.7) + 
+  labs(title = paste0("Model residuals for y = log(# of downloads in 1y)"),
+  	   subtitle= bquote("MSE: "~ .(round(MSE.tmp, 3))~
+  	                      ","~r^{2}~": "~ .(round(r2.tmp, 3))),
+       # caption = paste0("Model: ", (gsub("model360_", "", names(plt.df.360[i])))),
+       x = "observed",
+       y = "residual (y - hat{y})") + 
+  geom_abline(intercept = 0, slope = 0, color="red", 
+              linetype="dashed", size=1.5) + 
+  theme_gray(base_size = 12)
+
+
+
+
+```
+
+
+
+# Coefficients estimate plot
+
+- top 10 
+
+```{r model_lm_coeff_comparison_top10, fig.width=7, fig.height=7}
+
+rank.max <- 10
+
+model_1_coef.df.SUB <- 
+  model_1_coef.df %>%
+  filter(abs(coef) > 0.00000) %>%
+  mutate(outcome = "log(# of downloads in 90 days)",
+         coef_rank = rank(desc(abs(coef)))) %>%
+  arrange(coef_rank) 
+
+model_2_coef.df.SUB <- 
+  model_2_coef.df %>%
+  filter(abs(coef) > 0.00000) %>%
+  mutate(outcome = "log(# of downloads in 365 days)",
+         coef_rank = rank(desc(abs(coef)))) %>%
+  arrange(coef_rank) 
+
+keep.vars <- union(model_1_coef.df.SUB$var[1:rank.max], 
+                   model_2_coef.df.SUB$var[1:rank.max])
+model_coef.final <- 
+  rbind(model_1_coef.df.SUB,
+        model_2_coef.df.SUB) %>%
+  filter(var %in% keep.vars)
+
+model_coef.final.agg <- 
+  model_coef.final %>%
+  group_by(var) %>%
+  summarise(val_abs_max = max(abs(coef))) %>%
+  arrange(val_abs_max) %>%
+  as.data.frame()
+model_coef.final$var <- factor(as.character(model_coef.final$var),
+                               levels = model_coef.final.agg$var)
+model_coef.final$group = sign(model_coef.final$coef )
+
+outcome.unique <- sort(unique(as.character(model_coef.final$outcome)))
+model_coef.final$outcome <- factor(as.character(model_coef.final$outcome),
+                               levels = c(outcome.unique[1], outcome.unique[2]))
+# 
+# ggplot(model_coef.final, aes(x = var, y = coef, fill = factor(group))) + 
+#   geom_bar(stat = "identity") + 
+#   facet_grid(. ~ outcome, scales = "free") +
+#   coord_flip() + 
+#   theme_gray(base_size = 12) + 
+#   labs(title = "Top coefficient estimates from each outcome model",
+#        y = "Lasso coefficient estimate from corresponding model",
+#        x = "Variable name") + 
+#   theme(legend.position = "none") 
+
+
+## only particular variable 
+ggplot(model_coef.final %>% filter(outcome == levels(model_coef.final$outcome)[1]), 
+       aes(x = var, y = coef, fill = factor(group))) + 
+  geom_bar(stat = "identity") + 
+  # facet_grid(. ~ outcome, scales = "free") +
+  coord_flip() + 
+  theme_gray(base_size = 14) + 
+  labs(title = "Top coefficient estimates (linear regression)",
+       y = "Lasso coefficient estimate",
+       x = "Variable name") + 
+  theme(legend.position = "none") 
+
+
+```
+
+
+
+- top 15
+
+```{r model_lm_coeff_comparison_top15, fig.width=10, fig.height=10}
+
+rank.max <- 15
+
+model_1_coef.df.SUB <- 
+  model_1_coef.df %>%
+  filter(abs(coef) > 0.00000) %>%
+  mutate(outcome = "log(# of downloads in 90 days)",
+         coef_rank = rank(desc(abs(coef)))) %>%
+  arrange(coef_rank) 
+
+model_2_coef.df.SUB <- 
+  model_2_coef.df %>%
+  filter(abs(coef) > 0.00000) %>%
+  mutate(outcome = "log(# of downloads in 365 days)",
+         coef_rank = rank(desc(abs(coef)))) %>%
+  arrange(coef_rank) 
+
+keep.vars <- union(model_1_coef.df.SUB$var[1:rank.max], 
+                   model_2_coef.df.SUB$var[1:rank.max])
+model_coef.final <- 
+  rbind(model_1_coef.df.SUB,
+        model_2_coef.df.SUB) %>%
+  filter(var %in% keep.vars)
+
+model_coef.final.agg <- 
+  model_coef.final %>%
+  group_by(var) %>%
+  summarise(val_abs_max = max(abs(coef))) %>%
+  arrange(val_abs_max) %>%
+  as.data.frame()
+model_coef.final$var <- factor(as.character(model_coef.final$var),
+                               levels = model_coef.final.agg$var)
+model_coef.final$group = sign(model_coef.final$coef )
+
+outcome.unique <- sort(unique(as.character(model_coef.final$outcome)))
+model_coef.final$outcome <- factor(as.character(model_coef.final$outcome),
+                               levels = c(outcome.unique[1], outcome.unique[2]))
+
+ggplot(model_coef.final, aes(x = var, y = coef, fill = factor(group))) + 
+  geom_bar(stat = "identity") + 
+  facet_grid(. ~ outcome, scales = "free") +
+  coord_flip() + 
+  theme_gray(base_size = 16) + 
+  labs(title = "Top 10 coefficient estimates from each outcome model, combined",
+       x = "Lasso coefficient estimate from corresponding model",
+       y = "Variable name") + 
+  theme(legend.position = "none") 
+
+
+```
+
+

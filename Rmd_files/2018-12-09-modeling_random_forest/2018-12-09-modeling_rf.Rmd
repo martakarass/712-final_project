@@ -1,0 +1,692 @@
+---
+title: 'Modeling: random forest'
+author: 
+- "Daniel Antiporta"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+---
+
+
+```{r, include = FALSE}
+#rm(list = ls())
+knitr::opts_chunk$set(include = TRUE, comment = NA, cache = TRUE, 
+                      message = FALSE, warning = FALSE)
+
+```
+
+* Define project folder `712-final_project` path. That is, modify `project.dir` string below; once it points to your `712-final_project` folder location, all other stuff below would work. 
+
+```{r, messsage= FALSE, warning=FALSE}
+user.name <- Sys.info()[7]
+if(user.name=="antiporta") project.dir <- "/Users/antiporta/Dropbox/712-final_project/"
+if(user.name=="dantipor") project.dir <- "C://Users//dantipor//Dropbox//712-final_project/"
+
+library(caret)
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+library(fastDummies)
+library(janitor)
+library(tidyverse)
+```
+
+
+# Read data 
+
+```{r}
+
+out.path <- file.path(project.dir, "data/final_dfs/data_x.csv")
+x_df0 <- read.csv(out.path, stringsAsFactors = FALSE)
+#head(x_df0)
+
+out.path <- file.path(project.dir, "data/final_dfs/data_y.csv")
+y_df0 <- read.csv(out.path, stringsAsFactors = FALSE)
+#head(y_df0)
+
+```
+
+# Mutate data 
+
+### Create subset of columns of `x` data which will be used in modelling
+
+```{r}
+x_df0 <- 
+  x_df0 %>% 
+  select(-pkg_name,
+         -rversion_min)
+
+names(x_df0)[apply(x_df0, 2, function(col) any(is.na(col)))]
+x_df0[is.na(x_df0)] <- 0
+names(x_df0)[apply(x_df0, 2, function(col) any(is.na(col)))]
+x_df <- x_df0
+```
+
+
+### Create dummy variables for subset of columns of `x`
+
+```{r}
+## x_df_license_group
+x_df_license_group <- x_df %>% select(license_group)
+x_df_license_group_DUMMY <- 
+  dummy_cols(x_df_license_group,
+             remove_most_frequent_dummy = TRUE) %>%
+  select(-license_group)
+x_df_license_group_DUMMY <- as.data.frame(clean_names(x_df_license_group_DUMMY))
+x_df <- cbind(x_df %>% select(-license_group),
+              x_df_license_group_DUMMY)
+
+x_df <- scale(x_df, center = TRUE, scale = TRUE)
+x_df <- as.data.frame(x_df)
+
+## Sanity check
+table(sapply(x_df, class))
+
+```
+
+### Mutate columns of `y` 
+
+```{r}
+y_df <- 
+  y_df0 %>%
+  select(-pkg_name) %>%
+  mutate(download_cnt_90d_LOG = log(download_cnt_90d),
+         download_cnt_365d_LOG = log(download_cnt_365d))
+# y_df <- scale(y_df, center = TRUE, scale = TRUE)
+y_df <- as.data.frame(y_df)
+
+```
+
+
+### Create data split 
+
+```{r}
+set.seed(56299)
+trainIndex <- createDataPartition(y_df$download_cnt_90d, 
+                                  p = 0.7, 
+                                  list = FALSE, 
+                                  times = 1)
+#head(trainIndex[, 1], 100)
+mean(head(trainIndex[, 1], 100))
+
+## Define the train and test set                                  
+x_df_TRAIN <- x_df[trainIndex, ]
+x_df_TEST  <- x_df[-trainIndex, ]
+y_df_TRAIN <- y_df[trainIndex, ]
+y_df_TEST  <- y_df[-trainIndex, ]
+
+dim(x_df_TRAIN); dim(x_df_TEST)
+dim(y_df_TRAIN); dim(y_df_TEST)
+
+```
+
+# Quickly explore the data 
+
+```{r}
+#Scale and Centered X Data
+x_df.cor <- as.data.frame(cor(x_df))
+x_df.cor$var1 <- rownames(x_df.cor)
+x_df.cor <- x_df.cor %>% melt(id.vars = "var1")
+## Create label 
+x_df.cor_names_sorted <- as.data.frame(t(apply(x_df.cor[, 1:2], 1, sort))) 
+x_df.cor_label <- paste0(x_df.cor_names_sorted[, 1], "_", x_df.cor_names_sorted[, 2])
+x_df.cor$label <- x_df.cor_label
+## Discard duplicates
+x_df.cor.FINAL <- 
+  x_df.cor %>%
+  filter(var1 != variable) %>%
+  select(label, value) %>%
+  distinct() %>%
+  arrange(desc(abs(value)))
+
+boxplot(x_df.cor.FINAL$value, main = "Boxplot of correlation values")
+
+```
+
+
+# Model outcome: `download_cnt_90d_LOG`
+
+- Model-specific objects
+
+```{r fit_rf_model_90}
+
+## Data 
+train_set_1 <- cbind(y_df_TRAIN %>% select(y = download_cnt_90d_LOG),
+                     x_df_TRAIN)
+test_set_1 <- cbind(y_df_TEST %>% select(y = download_cnt_90d_LOG),
+                    x_df_TEST)
+
+## Control object
+set.seed(123)
+train_control <- trainControl(method = "cv", 
+                              number = 10)
+metric <- "RMSE"
+
+#DEFAULT
+mtry <- floor(sqrt(ncol(train_set_1[-1])*0.7))
+tunegrid <- expand.grid(.mtry=mtry)
+
+set.seed(123)
+start <- proc.time()[3]
+rf_default <-train(y~., data=train_set_1, method="rf",
+                   tuneGrid= tunegrid, trControl=train_control,
+                   importance=TRUE)
+end <- proc.time()[3]
+print(paste("This took ", round(end-start,digits = 1), " seconds", sep = ""))
+print(rf_default)
+
+#Automatic TUNING
+start <- proc.time()[3]
+rf_standard <-train(y~., data=train_set_1, method="rf", 
+                   trControl=train_control,
+                   importance=TRUE)
+end <- proc.time()[3]
+print(paste("This took ", round(end-start,digits = 1), " seconds", sep = ""))
+print(rf_standard)
+
+#Number of trees TUNING
+set.seed(123)
+train_control <- trainControl(method="cv", 
+  number=10, 
+  search="grid")
+tunegrid <- expand.grid(.mtry=mtry)
+modellist <- list()
+for (ntree in c(50, 100, 500, 1000, 1500)) {
+  set.seed(123)
+  fit <- train(y~., data=train_set_1, 
+    method="rf", metric=metric, 
+    tuneGrid=tunegrid, trControl=train_control, 
+    ntree=ntree,importance=TRUE)
+  key <- toString(ntree)
+  modellist[[key]] <- fit
+}
+```
+
+###Get Models for 90 days download
+
+```{r save_rf_model_90}
+model90_default<-rf_default
+model90_auto<-rf_standard
+model90_tree50<-modellist[1]$`50`
+model90_tree100<-modellist[2]$`100`
+model90_tree500<-modellist[3]$`500`
+model90_tree1000<-modellist[4]$`1000`
+model90_tree2000<-modellist[5]$`1500`
+files90<-c("model90_default",
+            "model90_auto",
+            "model90_tree50",
+            "model90_tree100",
+            "model90_tree500",
+            "model90_tree1000",
+            "model90_tree2000")
+for (i in files90){
+  saveRDS(i, 
+    file = paste0(project.dir, 
+                "Rmd_files/2018-12-09-modeling_random_forest/",
+                i))
+}
+
+#Plot tuning parameters for AUTO model
+plot(model90_auto)
+
+#Get Perfomance df
+list90<-lapply(1:length(files90), function(i){
+  results_i<-get(unique(files90[i])[1])$results
+  results_i<-results_i %>% as.data.frame() %>%
+    mutate(type=files90[i])
+})
+results.list90 <- do.call(rbind.data.frame, list90 )
+results.list90 <- results.list90 %>% separate(type, c("model", "type"), "_")
+results.list90
+saveRDS(results.list90, 
+    file = paste0(project.dir, 
+                "Rmd_files/2018-12-09-modeling_random_forest/results_list90"))
+```
+
+### Investigate variable importance
+
+```{r model_rf_model_90_var_importance, fig.width=8, fig.height=10}
+
+rank_max <- 14
+importance90_list<-lapply(1:length(files90), function(i){
+  importance_df_i <- varImp(get(files90[i]))
+  importance_df_i <- importance_df_i["importance"] %>% as.data.frame() %>%
+    rownames_to_column(var = "var") %>% arrange(desc(Overall)) %>%
+     filter(row_number() <= rank_max) %>% as.data.frame() %>%
+    mutate(var=factor(as.character(var),
+                              levels = rev(var)))
+})
+names(importance90_list)<-gsub("model90_", "", unique(files90))
+saveRDS(importance90_list, 
+    file = paste0(project.dir, 
+                "Rmd_files/2018-12-09-modeling_random_forest/importance90_list"))
+
+##Plot
+for (i in 1:7){
+ p_i<-ggplot(importance90_list[[i]], aes(x = var, y = Overall)) + 
+    geom_bar(stat = "identity") + 
+    coord_flip() + 
+    theme_gray(base_size = 16) + 
+    labs(title = "Variable importance from random forest for y = log(# of downloads in 90 days)\nfor top 14 important variables",
+         subtitle = paste0("Model: ", names(importance90_list[i])),
+         x = "Variable name",
+         y = "Variable importance from random forest") + 
+    theme(legend.position = "none") 
+ print(p_i)
+}
+```
+
+### Predictions: Fit to the test data 
+
+```{r prediction_rf_model_90}
+#Prediction Results
+plt.df.90<-vector(length=length(files90), mode = "list")
+names(plt.df.90)<-unique(files90)
+RMSE.list90<-vector(length=length(files90))
+r2.tmp.list90<-vector(length=length(files90))
+MSE.tmp.list90<-vector(length=length(files90))
+res.tmp.list90<-vector(length=length(files90))
+for (i in 1:length(files90)){
+  predictions_i <- predict(get(files90[i]), test_set_1[-1])
+  plt.df_i <- data.frame(pred = predictions_i, obs = test_set_1[, 1])
+  plt.df.90[[i]] <-as.tibble(plt.df_i)
+  RMSE.list90[i] <- 
+    sqrt(sum((predictions_i - test_set_1$y)^2)/length(predictions_i))
+  resid.tmp.list90_i <- plt.df_i$obs - plt.df_i$pred
+  res.tmp.list90[i] <-as.tibble(resid.tmp.list90_i)
+  SS.total.list90 <- sum((plt.df_i$obs - mean(plt.df_i$obs))^2)
+  SS.regression.list90 <- sum((plt.df_i$pred-mean(plt.df_i$obs))^2)
+  SS.residual.list90   <- sum(resid.tmp.list90_i^2)
+  r2.tmp.list90[i] <- SS.regression.list90/SS.total.list90
+  MSE.tmp.list90[i] <- mean((resid.tmp.list90_i)^2)
+}
+prediction.list90<-cbind.data.frame(files90, 
+                                    RMSE.list90,
+                                    r2.tmp.list90,
+                                    MSE.tmp.list90)
+prediction.list90<-prediction.list90 %>%
+  separate(files90, c("model", "type"), "_")
+prediction.list90
+saveRDS(prediction.list90, 
+    file = paste0(project.dir, 
+                "Rmd_files/2018-12-09-modeling_random_forest/prediction_list90"))
+```
+
+```{r model_rf_model_1_pred, fig.width= 6, fig.height=5}
+## plot 1 
+for (i in 1:7){
+p<-ggplot(plt.df.90[[i]], aes(x = obs, y = pred)) + 
+  geom_point(alpha = 0.7) + 
+  labs(title = paste0("Model predictions for y = log(# of downloads in 90 days)"),
+  	   subtitle= bquote("MSE: "~ .(round(MSE.tmp.list90[[i]], 3))~
+  	                      ","~r^{2}~": "~ .(round(r2.tmp.list90[[i]], 3))),
+       caption = paste0("Model: ", (gsub("model90_", "", names(plt.df.90[i])))),
+       x = "observed",
+       y = "predicted") + 
+  geom_abline(intercept = 0, slope = 1, color="red", 
+              linetype="dashed", size=1.5) + 
+  theme_gray(base_size = 12)
+print(p)
+}
+for (i in 1:7){
+## plot 2
+data_plot<-cbind(plt.df.90[[i]], res.tmp.list90[[i]])
+names(data_plot)<-c("pred", "obs", "resid.tmp")
+q<-ggplot(data_plot, aes(x = obs, y = resid.tmp)) + 
+  geom_point(alpha= 0.7) + 
+  labs(title = paste0("Model residuals for y = log(# of downloads in 90 days)"),
+  	   subtitle= bquote("MSE: "~ .(round(MSE.tmp.list90[[i]], 3))~
+  	                      ","~r^{2}~": "~ .(round(r2.tmp.list90[[i]], 3))),
+       caption = paste0("Model: ", (gsub("model90_", "", names(plt.df.90[i])))),
+       x = "observed",
+       y = "residual (y - hat{y})") + 
+  geom_abline(intercept = 0, slope = 0, color="red", 
+              linetype="dashed", size=1.5)+ 
+  theme_gray(base_size = 12) 
+print(q)
+}
+```
+
+# Model outcome: `download_cnt_365d_LOG`
+
+- Model-specific objects
+
+```{r fit_rf_model_360}
+## Data 
+train_set_2 <- cbind(y_df_TRAIN %>% select(y = download_cnt_365d_LOG),
+                     x_df_TRAIN)
+test_set_2 <- cbind(y_df_TEST %>% select(y = download_cnt_365d_LOG),
+                    x_df_TEST)
+
+## Control object
+set.seed(123)
+train_control_2 <- trainControl(method = "cv", 
+                              number = 10)
+metric <- "RMSE"
+
+#DEFAULT
+mtry <- floor(sqrt(ncol(train_set_2[-1])*0.7))
+tunegrid <- expand.grid(.mtry=mtry)
+
+set.seed(123)
+start <- proc.time()[3]
+rf_default_2 <-train(y~., data=train_set_2, method="rf", 
+  metric=metric, tuneGrid= tunegrid, trControl=train_control_2,
+                   importance=TRUE)
+end <- proc.time()[3]
+print(paste("This took ", round(end-start,digits = 1), " seconds", sep = ""))
+print(rf_default_2)
+#plot(rf_default_2)
+
+predictions.default_2 <- predict(rf_default_2, test_set_2[-1])
+RMSE.default_2 <- sqrt(sum((predictions.default_2 - test_set_2$y)^2)/length(predictions.default_2))
+print(RMSE.default_2)
+#plot(RMSE.default_2$finalModel)
+
+#Automatic TUNING
+start <- proc.time()[3]
+rf_standard_2 <-train(y~., data=train_set_2, method="rf", 
+ trControl=train_control_2,
+                   importance=TRUE)
+end <- proc.time()[3]
+print(paste("This took ", round(end-start,digits = 1), " seconds", sep = ""))
+print(rf_standard_2)
+#plot(rf_standard_2)
+
+predictions.standard_2 <- predict(rf_standard_2, test_set_2[-1])
+RMSE.standard_2 <- sqrt(sum((predictions.standard_2 - test_set_2$y)^2)/length(predictions.standard_2))
+print(RMSE.standard_2)
+#plot(RMSE.standard_2$finalModel)
+
+#Number of trees TUNING
+set.seed(123)
+train_control_2 <- trainControl(method="cv", 
+  number=10, 
+  search="grid")
+tunegrid <- expand.grid(.mtry=mtry)
+modellist_2 <- list()
+for (ntree in c(50, 100, 500, 1000, 1500, 2000, 2500)) {
+  set.seed(123)
+  fit <- train(y~., data=train_set_2, 
+    method="rf", metric=metric, 
+    tuneGrid=tunegrid, trControl=train_control_2, 
+    ntree=ntree,importance=TRUE)
+  key <- toString(ntree)
+  modellist_2[[key]] <- fit
+}
+```
+
+###Get Models for 360 days download
+
+```{r save_rf_model_360}
+model360_default<-rf_default_2
+model360_auto<-rf_standard_2
+model360_tree50<-modellist_2[1]$`50`
+model360_tree100<-modellist_2[2]$`100`
+model360_tree500<-modellist_2[3]$`500`
+model360_tree1000<-modellist_2[4]$`1000`
+model360_tree2000<-modellist_2[5]$`1500`
+files360<-c("model360_default",
+            "model360_auto",
+            "model360_tree50",
+            "model360_tree100",
+            "model360_tree500",
+            "model360_tree1000",
+            "model360_tree2000")
+for (i in files360){
+  saveRDS(i, 
+    file = paste0(project.dir, 
+                "Rmd_files/2018-12-09-modeling_random_forest/",
+                i))
+}
+
+#Plot tuning parameters for AUTO model
+plot(model360_auto)
+
+#Get Perfomance df
+list360<-lapply(1:length(files360), function(i){
+  results_i<-get(unique(files360[i])[1])$results
+  results_i<-results_i %>% as.data.frame() %>%
+    mutate(type=files360[i])
+})
+results.list360 <- do.call(rbind.data.frame, list360)
+results.list360 <- results.list360 %>% separate(type, c("model", "type"), "_")
+results.list360
+saveRDS(results.list360, 
+    file = paste0(project.dir, 
+                "Rmd_files/2018-12-09-modeling_random_forest/results_list360"))
+
+```
+
+### Investigate variable importance
+
+```{r model_rf_model_360_var_importnace, fig.width=8, fig.height=10}
+rank_max <- 14
+importance360_list<-lapply(1:length(files360), function(i){
+  importance_df_i <- varImp(get(files360[i]))
+  importance_df_i <- importance_df_i["importance"] %>% as.data.frame() %>%
+    rownames_to_column(var = "var") %>% arrange(desc(Overall)) %>%
+     filter(row_number() <= rank_max) %>% as.data.frame() %>%
+    mutate(var=factor(as.character(var),
+                              levels = rev(var)))
+})
+names(importance360_list)<-gsub("model360_", "", unique(files360))
+saveRDS(importance360_list, 
+    file = paste0(project.dir, 
+                "Rmd_files/2018-12-09-modeling_random_forest/importance360_list"))
+
+##Plot
+for (i in 1:7){
+ p_i<-ggplot(importance360_list[[i]], aes(x = var, y = Overall)) + 
+    geom_bar(stat = "identity") + 
+    coord_flip() + 
+    theme_gray(base_size = 16) + 
+    labs(title = "Variable importance from random forest for y = log(# of downloads in 360 days)\nfor top 14 important variables",
+         subtitle = paste0("Model: ", names(importance360_list[i])),
+         x = "Variable name",
+         y = "Variable importance from random forest") + 
+    theme(legend.position = "none") 
+ print(p_i)
+}
+```
+
+### Predictions: Fit to the test data 
+
+```{r prediction_rf_model_360}
+#Prediction Results
+plt.df.360<-vector(length=length(files360), mode = "list")
+names(plt.df.360)<-unique(files360)
+RMSE.list360<-vector(length=length(files360))
+r2.tmp.list360<-vector(length=length(files360))
+MSE.tmp.list360<-vector(length=length(files360))
+res.tmp.list360<-vector(length=length(files360))
+
+for (i in 1:length(files360)){
+  predictions_i <- predict(get(files360[i]), test_set_2[-1])
+  plt.df_i <- data.frame(pred = predictions_i, obs = test_set_2[, 1])
+  plt.df.360[[i]] <-as.tibble(plt.df_i)
+  RMSE.list360[i] <- 
+    sqrt(sum((predictions_i - test_set_2$y)^2)/length(predictions_i))
+  resid.tmp.list360 <- plt.df_i$obs - plt.df_i$pred
+  res.tmp.list360[i] <-as.tibble(resid.tmp.list360)
+  SS.total.list360 <- sum((plt.df_i$obs - mean(plt.df_i$obs))^2)
+  SS.regression.list360 <- sum((plt.df_i$pred-mean(plt.df_i$obs))^2)
+  SS.residual.list360   <- sum(resid.tmp.list360^2)
+  r2.tmp.list360[i] <- SS.regression.list360/SS.total.list360
+  MSE.tmp.list360[i] <- mean((resid.tmp.list360)^2)
+}
+prediction.list360<-cbind.data.frame(files360, 
+                                    RMSE.list360,
+                                    r2.tmp.list360,
+                                    MSE.tmp.list360)
+prediction.list360<-prediction.list360 %>%
+  separate(files360, c("model", "type"), "_")
+prediction.list360
+saveRDS(prediction.list360, 
+    file = paste0(project.dir, 
+                "Rmd_files/2018-12-09-modeling_random_forest/prediction_list360"))
+
+```
+
+```{r model_rf_model_2_pred, fig.width= 6, fig.height=5}
+## plot 1 
+for (i in 1:7){
+p<-ggplot(plt.df.360[[i]], aes(x = obs, y = pred)) + 
+  geom_point(alpha = 0.7) + 
+  labs(title = paste0("Model predictions for y = log(# of downloads in 1 year)"),
+  	   subtitle= bquote("MSE: "~ .(round(MSE.tmp.list360[[i]], 3))~
+  	                      ","~r^{2}~": "~ .(round(r2.tmp.list360[[i]], 3))),
+       caption = paste0("Model: ", (gsub("model360_", "", names(plt.df.360[i])))),
+       x = "observed",
+       y = "predicted") + 
+  geom_abline(intercept = 0, slope = 1, color="red", 
+              linetype="dashed", size=1.5) +
+    theme_gray(base_size = 12)
+print(p)
+}
+for (i in 1:7){
+## plot 2
+data_plot<-cbind(plt.df.360[[i]], res.tmp.list360[[i]])
+names(data_plot)<-c("pred", "obs", "resid.tmp")
+q<-ggplot(data_plot, aes(x = obs, y = resid.tmp)) + 
+  geom_point(alpha = 0.7) + 
+  labs(title = paste0("Model residuals for y = log(# of downloads in 360 days)"),
+  	   subtitle= bquote("MSE: "~ .(round(MSE.tmp.list360[[i]], 3))~
+  	                      ","~r^{2}~": "~ .(round(r2.tmp.list360[[i]], 3))),
+       caption = paste0("Model: ", (gsub("model360_", "", names(plt.df.360[i])))),
+       x = "observed",
+       y = "residual (y - hat{y})") + 
+  geom_abline(intercept = 0, slope = 0, color="red", 
+              linetype="dashed", size=1.5) + 
+  theme_gray(base_size = 12)
+print(q)
+}
+```
+
+### Best Model for 360d downloads-PLOTS
+
+-Ranfom Forest with `mtry`=101 and `ntree`=1000
+
+```{r model_rf_model_2_pred_hmw, fig.width= 5, fig.height=5, echo=FALSE}
+model_360_pred_final <- predict(model360_auto,
+                        newdata = test_set_2[, -1])
+
+plt.df_360_final <- data.frame(pred = model_360_pred_final, obs = test_set_2[, 1])
+
+## plot 1 
+resid.tmp <- plt.df_360_final$obs - plt.df_360_final$pred
+SS.total      <- sum((plt.df_360_final$obs - mean(plt.df_360_final$obs))^2)
+SS.regression <- sum((plt.df_360_final$pred-mean(plt.df_360_final$obs))^2)
+SS.residual   <- sum(resid.tmp^2)
+r2.tmp <- SS.regression/SS.total
+MSE.tmp <- mean((resid.tmp)^2)
+
+ggplot(plt.df_360_final, aes(x = obs, y = pred)) + 
+  geom_point(alpha = 0.7) + 
+  labs(title = paste0("Predictions of log(# of downloads in 1y)"),
+  	   subtitle= bquote("MSE: "~ .(round(MSE.tmp, 3))~
+  	                      ","~r^{2}~": "~ .(round(r2.tmp, 3))),
+       caption = paste0("Model: Tree 1000"),
+       x = "observed",
+       y = "predicted") + 
+  theme(title =element_text(size=16)) +
+  geom_abline(intercept = 0, slope = 1, color="red", 
+              linetype="dashed", size=1.5)  + 
+  theme_gray(base_size = 12)
+
+
+## plot 2
+plt.df_360_final$resid <- resid.tmp
+ggplot(plt.df_360_final, aes(x = obs, y = resid.tmp)) + 
+  geom_point() + 
+  labs(title = paste0("Model residuals for y = log(# of downloads in 1y) \n(red line: y = 0)"),
+  	   subtitle= bquote("MSE: "~ .(round(MSE.tmp, 3))~
+  	                      ","~r^{2}~": "~ .(round(r2.tmp, 3))),
+       caption = paste0("Model: Tree 1000"),
+       x = "observed",
+       y = "residual (y - hat{y})") +
+  theme(title =element_text(size=12, face='bold')) +
+  theme(title =element_text(size=16)) +
+  geom_abline(intercept = 0, slope = 0, color="red", 
+              linetype="dashed", size=1.5)  + 
+  theme_gray(base_size = 12)
+```
+
+```{r model_rf_model_2_var_importance, fig.width=10, fig.height=10, echo=FALSE}
+#Var Importance
+rank_max <- 14
+importance_df_360 <- varImp(model360_auto)$importance
+importance_df_360$var <- rownames(importance_df_360)
+rownames(importance_df_360) <- NULL
+importance_df_360 <- 
+  importance_df_360 %>%
+  arrange(desc(Overall)) %>%
+  filter(row_number() <= rank_max) %>%
+  as.data.frame()
+importance_df_360$var <- factor(as.character(importance_df_360$var),
+                            levels = rev(importance_df_360$var))
+
+##plot
+ggplot(importance_df_360, aes(x = var, y = Overall)) + 
+  geom_bar(stat = "identity") + 
+  coord_flip() + 
+  theme_gray(base_size = 16) + 
+  labs(title = "Top Variable importance",
+       x = "Variable name",
+       y = "Variable importance") + 
+  theme(legend.position = "none",
+        axis.text = element_text(size=22), 
+        title = element_text(size=26),
+        axis.title = element_text(size=24))
+```
+
+```{r top_variables_for_models, fig.width=10, fig.height=10, echo=FALSE}
+##plot
+rank.max <- 10
+model_1_var.df.SUB <- 
+  importance90_list$tree1000 %>%
+  mutate(outcome = "log(# of downloads in 90 days)",
+         var_rank = rank(desc(abs(Overall)))) %>%
+  arrange(var_rank) 
+
+model_2_var.df.SUB <- 
+  importance_df_360 %>%
+  mutate(outcome = "log(# of downloads in 360 days)",
+         var_rank = rank(desc(abs(Overall)))) %>%
+  arrange(var_rank) 
+
+keep.vars <- union(model_1_var.df.SUB$var[1:rank.max], 
+                   model_2_var.df.SUB$var[1:rank.max])
+model_var.final <- 
+  rbind(model_1_var.df.SUB,
+        model_2_var.df.SUB) %>%
+  filter(var %in% keep.vars)
+
+model_var.final.agg <- 
+  model_var.final %>%
+  group_by(var) %>%
+  summarise(val_abs_max = max(abs(Overall))) %>%
+  arrange(val_abs_max) %>%
+  as.data.frame()
+model_var.final$var <- factor(as.character(model_var.final$var),
+                               levels = model_var.final.agg$var)
+model_var.final$group = sign(model_var.final$Overall )
+
+outcome.unique <- sort(unique(as.character(model_var.final$outcome)))
+model_var.final$outcome <- factor(as.character(model_var.final$outcome),
+                               levels = c(outcome.unique[1], outcome.unique[2]))
+
+ggplot(model_var.final, 
+       aes(x = var, y = Overall, fill = factor(group))) + 
+  geom_bar(stat = "identity") + 
+  facet_grid(. ~ outcome) +
+  coord_flip() + 
+  theme_gray(base_size = 14) + 
+  labs(title = "Top variable importance (random forest)",
+       y = "Variable Importance",
+       x = "Variable name") + 
+  theme(legend.position = "none") 
+```

@@ -1,0 +1,238 @@
+---
+title: 'Features engineering: task 3'
+author: "Marta Karas"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: 
+  html_document:
+    toc: false
+    toc_depth: 3
+---
+
+- vignette: pages (min / max / mean)
+- reference manual: number of functions exported
+- reference manual: unique number of papers cited
+
+
+```{r, include = FALSE}
+rm(list = ls())
+knitr::opts_chunk$set(include = TRUE, comment = NA, cache = FALSE, 
+                      message = FALSE, warning = FALSE)
+options(stringsAsFactors=FALSE)
+
+```
+
+* Define project folder `712-final_project` path. That is, modify `project.dir` string below; once it points to your `712-final_project` folder location, all other stuff below would work. 
+
+```{r}
+
+library(rvest)
+library(ggplot2)
+library(dplyr)
+library(future)
+library(stringi)
+library(tm)
+library(tools)
+
+user.name<-Sys.info()[7]
+if(user.name=="antiporta") project.dir <- "/Users/antiporta/Dropbox/712-final_project/"
+if(user.name=="mkaras") project.dir <- "/Users/mkaras/Dropbox/JHU/711-ADV_DATA_SCIENCE/712-final_project"
+```
+
+
+# Read `data.frame` with package name, package first release 
+
+```{r}
+path.tmp <- file.path(project.dir, "data/pkg_first_release_SUBSET.csv")
+pkg_first_rel <- read.csv(path.tmp, stringsAsFactors = FALSE)
+pkg_first_rel$first_release <- as.Date(pkg_first_rel$first_release)
+
+## Preview
+head(pkg_first_rel)
+packageNames.vec <- pkg_first_rel$pkg_name
+```
+
+
+
+# 1. Get info about vignette(s)
+
+```{r, eval = FALSE}
+
+pkg_install_dir <- "/Users/mkaras/Documents/JHU/712-final_project_MY_WORKSPACE/data/pkg_installation_dir/"
+
+pkg_name.i <- packageNames.vec[i]
+n <- length(packageNames.vec)
+
+plan(sequential)
+# plan(multisession, workers = parallel::detectCores() - 1)
+
+t1 <- Sys.time()
+results.f <- lapply(1:n, function(i) {
+  
+  future({
+    
+    pkg_name.i <- packageNames.vec[i]
+    pkg_install_dir.i <- paste0(pkg_install_dir, pkg_name.i)
+    files.i <- list.files(pkg_install_dir.i, full.names = FALSE)
+    
+    no.vignette <- TRUE
+    list_out <- list()
+    
+    if ("vignettes" %in% files.i){
+      vignette.dir <- paste0(pkg_install_dir.i, "/vignettes")
+      vignette.url.vec <- list.files(vignette.dir, full.names = TRUE)
+      vignette.url.vec <- vignette.url.vec[file_ext(vignette.url.vec) %in% 
+                                             c("Rnw", "Rmd", "md")]
+      if (length(vignette.url.vec) > 0){
+        no.vignette <- FALSE
+        ## Iterate over list of vignette files
+        for (j in 1:length(vignette.url.vec)){
+          url   <- vignette.url.vec[j]
+          text <- paste0(readLines(url), collapse = " ") 
+          text <- removeNumbers(text)
+          text <- removePunctuation(text)
+          text <- stripWhitespace(text)
+          words <- unlist(stri_extract_all_words(text))
+          words <- words[nchar(words) >= 3]
+          words.cnt <- length(words)
+          list_out.vec <- c(pkg_name.i, 1, basename(url), words.cnt)
+          list_out[[length(list_out) + 1]] <- list_out.vec
+        }
+      } 
+    }
+    
+    if (no.vignette){
+      list_out[[length(list_out) + 1]] <- c(pkg_name.i, 0, NA, NA)
+    }
+    return(list_out)
+    
+  }) 
+}) 
+
+results <- lapply(results.f, value)
+t2 <- Sys.time()
+t2 - t1
+
+## Convert results list to a data frame 
+results.df0 <- lapply(results, function(ll){
+  ll <- do.call(rbind.data.frame, ll)
+  names(ll) <- c("pkg_name", "pkg_vig_any", "pkg_vig_name", "words_cnt")
+  ll
+})
+results.df <- do.call(rbind.data.frame, results.df0)
+results.df$pkg_vig_any <- as.numeric(as.character(results.df$pkg_vig_any))
+results.df$words_cnt <- as.numeric(as.character(results.df$words_cnt))
+
+##  ----------------------------------------------------------------------------
+## Save to file
+
+# out.path <- file.path(project.dir, "data/pkg_vignette_info_REDO.csv")
+# write.csv(results.df, out.path, row.names = FALSE, quote = FALSE)
+
+```
+
+
+# 2. Get info about exported functions number
+
+```{r, eval = FALSE}
+
+pkg_install_dir <- "/Users/mkaras/Documents/JHU/712-final_project_MY_WORKSPACE/data/pkg_installation_dir/"
+
+exported_func_cnt.vec <- numeric()
+
+n <- length(packageNames.vec)
+# n <- 10
+for (i in 1:n){
+  pkg_name.i <- packageNames.vec[i]
+  pkg_man_dir.i <- paste0(pkg_install_dir, pkg_name.i, "/man")
+  pkg_man_files.i <- list.files(pkg_man_dir.i, full.names = FALSE)
+  exported_func_cnt.vec[i] <- length(pkg_man_files.i)
+}
+
+exported_func_cnt.df <- 
+  data.frame(pkg_name = packageNames.vec,
+             exported_func_cnt = exported_func_cnt.vec,
+             stringsAsFactors = FALSE)
+
+exported_func_cnt.df %>% arrange(exported_func_cnt)
+
+# out.path <- file.path(project.dir, "data/exported_func_cnt.csv")
+# write.csv(exported_func_cnt.df, out.path, row.names = FALSE, quote = FALSE)
+```
+
+
+
+
+# Produce final data frame 
+
+### 1. Vignette info
+
+```{r}
+
+path.tmp <- file.path(project.dir, "data/pkg_vignette_info_REDO.csv")
+pkg_vignette_info <- read.csv(path.tmp, stringsAsFactors = FALSE)
+## Sanity checking
+any(is.na(pkg_vignette_info$pkg_vig_any))
+pkg_vignette_info %>% filter(pkg_vig_any == 1, is.na(words_cnt))
+
+df1 <- 
+  pkg_vignette_info %>%
+  group_by(pkg_name) %>%
+  summarize(vignette_any = max(pkg_vig_any),
+            vignette_cnt = sum(pkg_vig_any),
+            vignette_words_cnt_min = min(words_cnt),
+            vignette_words_cnt_max = max(words_cnt),
+            vignette_words_cnt_mean = mean(words_cnt),
+            vignette_words_cnt_median = median(words_cnt)) %>%
+  as.data.frame()
+
+
+```
+
+### 2. Info about exported functions number
+
+```{r}
+
+path.tmp <- file.path(project.dir, "data/exported_func_cnt.csv")
+exported_func_cnt <- read.csv(path.tmp, stringsAsFactors = FALSE)
+
+## Sanity checking
+dim(exported_func_cnt)
+head(exported_func_cnt)
+any(is.na(exported_func_cnt$exported_func_cnt))
+
+df2 <- exported_func_cnt
+
+```
+
+
+### Merge them all together
+
+```{r, eval = FALSE}
+
+dim(pkg_first_rel)
+
+df.out <- 
+  pkg_first_rel %>%
+  select(-first_release) %>%
+  left_join(df1, by = "pkg_name") %>%
+  left_join(df2, by = "pkg_name")
+
+dim(df.out)
+head(df.out)
+str(df.out)
+
+out.path <- file.path(project.dir, "data/feature_task/features_extracted_part3.csv")
+write.csv(df.out, out.path, row.names = FALSE, quote = FALSE)
+
+```
+
+
+
+
+
+
+
+
+
+
+

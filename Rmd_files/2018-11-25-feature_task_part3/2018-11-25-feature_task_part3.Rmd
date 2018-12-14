@@ -1,0 +1,578 @@
+---
+title: 'Features engineering: task 3'
+author: "Marta Karas"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: 
+  html_document:
+    toc: false
+    toc_depth: 3
+---
+
+- vignette: pages (min / max / mean)
+- reference manual: number of functions exported
+- reference manual: unique number of papers cited
+
+
+```{r, include = FALSE}
+rm(list = ls())
+knitr::opts_chunk$set(include = TRUE, comment = NA, cache = FALSE, 
+                      message = FALSE, warning = FALSE)
+options(stringsAsFactors=FALSE)
+
+```
+
+* Define project folder `712-final_project` path. That is, modify `project.dir` string below; once it points to your `712-final_project` folder location, all other stuff below would work. 
+
+```{r}
+
+library(rvest)
+library(ggplot2)
+library(dplyr)
+library(future)
+library(stringi)
+library(tm)
+library(tools)
+
+user.name<-Sys.info()[7]
+if(user.name=="antiporta") project.dir <- "/Users/antiporta/Dropbox/712-final_project/"
+if(user.name=="mkaras") project.dir <- "/Users/mkaras/Dropbox/JHU/711-ADV_DATA_SCIENCE/712-final_project"
+```
+
+
+# Read `data.frame` with package name, package first release 
+
+```{r}
+path.tmp <- file.path(project.dir, "data/pkg_first_release_SUBSET.csv")
+pkg_first_rel <- read.csv(path.tmp, stringsAsFactors = FALSE)
+pkg_first_rel$first_release <- as.Date(pkg_first_rel$first_release)
+
+## Preview
+head(pkg_first_rel)
+```
+
+
+
+# 1. Get info about vignette(s)
+
+### Remarks
+
+* Vignette can be either PDF or HTML (or other I have not spotted). Hence the extension has to be detected and appropriate parsing method used. 
+
+* When parsing PDF, it takes dowloading it first to the local directory. Caution must be taken while working in parallel: we cannot be downloading files under the same name! :) 
+
+* Text from both PDF / HTML undergoes basic cleaning before word count. This includes: 
+
+    * remove numbers
+    * remove punctuation
+    * strip whitespaces <br/><br/>
+    
+* Work had to be done to take care for potential errors (which there are many).
+
+```{r, eval = FALSE}
+
+packageNames.vec <- pkg_first_rel$pkg_name
+# packageNames.vec <- pkg_first_rel$pkg_name
+# plan(sequential)
+plan(multisession, workers = parallel::detectCores() - 1)
+
+
+t1 <- Sys.time()
+results.f <- lapply(1:length(packageNames.vec), function(i) {
+  
+  future({
+
+    ## Construct url to CRAN package website
+    pkg_name.i <- packageNames.vec[i]
+    # print(pkg_name.i)
+    
+    pkg.url.prefix <- paste0('https://cran.r-project.org/web/packages/', pkg_name.i)
+    pkg.url <- paste0(pkg.url.prefix, "/index.html")
+    
+    ## Read CRAN package website
+    read.html.out <-  tryCatch(read_html(pkg.url), error = function(e) e)
+    if (inherits(read.html.out, "error")){
+      e.note <- "Unsuccessful CRAN package website read via read_html()"
+      return(list(c(pkg_name.i, NA, NA, NA, NA, e.note))) 
+    }
+    
+    ## Read links to package vignettes URL 
+    vignette.url.vec0 <- tryCatch({
+      html_nodes(read.html.out, "table:nth-child(5) tr:nth-child(2) td+ td")  %>% 
+        html_nodes(xpath = "./a") %>% 
+        html_attr("href")
+    }, error = function(e) { e })
+    if (inherits(vignette.url.vec0, "error")){
+      e.note <- "Unsuccessful package vignettes URL extract via html_nodes()"
+      return(list(c(pkg_name.i, NA, NA, NA, NA, e.note))) 
+    }
+    
+    cond <- (length(vignette.url.vec0) > 0)
+    cond <- cond & (all(grepl(pattern = "vignettes", vignette.url.vec0)))
+    if (!cond) return(list(c(pkg_name.i, 0, NA, NA, NA, NA))) 
+    vignette.url.vec <- paste0(pkg.url.prefix, "/", vignette.url.vec0)
+    
+    ## Iterate over vignettes and get count word
+    list.out <- list()
+    for (j in 1:length(vignette.url.vec)){
+      
+      # print(paste0("vignette: ", i))
+      vignette.name <- vignette.url.vec0[j]
+      url   <- vignette.url.vec[j]
+      
+      text <- tryCatch({
+        file_ext.tmp <- file_ext(url)
+        if (file_ext.tmp == "pdf"){
+          ## Read from PDF
+          rand.num <- round(runif(1) * 1000000)
+          pdf.path.tmp <- paste0(project.dir, "/data/vignettes_tmp/vignette_tmp", rand.num, ".pdf") 
+          download.file(url, pdf.path.tmp)
+          reader <- readPDF(control = list(text = "-layout"))
+          reader.out <- reader(elem = list(uri = pdf.path.tmp), language = "en", id = "id1")
+          file.remove(pdf.path.tmp)
+          reader.out$content
+        } else if (file_ext.tmp == "html") {
+          ## Read from HTML: extract text from paragraphs and r chunk code
+          out <- read_html(url)
+          paste0(c(html_text(html_nodes(out, "p")),
+                   html_text(html_nodes(out, ".r"))), collapse = " ")
+        } else {
+          stop()
+        }
+      },  error = function(e) { e })
+      if (inherits(text, "error")){
+        e.note <- "Unsuccessful vignette read (HTML/PDF)"
+        return(list(c(pkg_name.i, 1, vignette.name, url, NA, e.note))) 
+      }
+      
+      ## Clean parsed text
+      text_clean <- tryCatch({
+        text <- removeNumbers(text)
+        text <- removePunctuation(text)
+        text <- stripWhitespace(text)
+        text
+      },  error = function(e) { e })
+      if (inherits(text_clean, "error")){
+        e.note <- "Unsuccessful text cleaning"
+        return(list(c(pkg_name.i, 1, vignette.name, url,  NA, e.note))) 
+      }
+      
+      ## Text to words cnt
+      words.cnt <- tryCatch({
+        words <- unlist(stri_extract_all_words(text_clean))
+        words <- words[nchar(words) >= 3]
+        length(words)
+      },  error = function(e) { e })
+      if (inherits(words.cnt, "error")){
+        e.note <- "Unsuccessful text to word count conversion"
+        return(list(c(pkg_name.i, 1, vignette.name, url, NA, e.note))) 
+      }
+    
+      words.cnt <- length(words)
+      return.vec <- c(pkg_name.i, 1, vignette.name, url, words.cnt, NA)
+      list.out[[length(list.out) + 1]] <- return.vec
+    }
+    
+    return(list.out)
+    
+  }) 
+  
+}) 
+
+results <- lapply(results.f, value)
+t2 <- Sys.time()
+t2 - t1
+
+
+## Convert results list to a data frame 
+results.df0 <- lapply(results, function(ll){
+  ll <- do.call(rbind.data.frame, ll)
+  names(ll) <- c("pkg_name", "pkg_vig_any", "pkg_vig_name", "pkg_vig_url", 
+                 "words_cnt",  "error_msg")
+  ll
+})
+results.df <- do.call(rbind.data.frame, results.df0)
+
+results.df.FINAL <- 
+  results.df %>%
+  select(pkg_name, pkg_vig_any, pkg_vig_name, words_cnt) %>%
+  mutate(pkg_vig_any = as.numeric(pkg_vig_any),
+         words_cnt = as.numeric(words_cnt)) 
+
+
+##  ----------------------------------------------------------------------------
+## Save to file
+
+# out.path <- file.path(project.dir, "data/pkg_vignette_info_EXT.csv")
+# write.csv(results.df, out.path, row.names = FALSE, quote = FALSE)
+# 
+# out.path <- file.path(project.dir, "data/pkg_vignette_info.csv")
+# write.csv(results.df.FINAL, out.path, row.names = FALSE, quote = FALSE)
+
+
+```
+
+
+### Try to add these unsuccessfull at 1st attempt
+
+```{r, eval = FALSE}
+
+packageNames.vec <- c("icesVocab", "testassay")
+# packageNames.vec <- pkg_first_rel$pkg_name
+plan(sequential)
+# plan(multisession, workers = parallel::detectCores() - 1)
+
+
+t1 <- Sys.time()
+results.f <- lapply(1:length(packageNames.vec), function(i) {
+  
+  future({
+
+    ## Construct url to CRAN package website
+    pkg_name.i <- packageNames.vec[i]
+    # print(pkg_name.i)
+    
+    pkg.url.prefix <- paste0('https://cran.r-project.org/web/packages/', pkg_name.i)
+    pkg.url <- paste0(pkg.url.prefix, "/index.html")
+    
+    ## Read CRAN package website
+    read.html.out <-  tryCatch(read_html(pkg.url), error = function(e) e)
+    if (inherits(read.html.out, "error")){
+      e.note <- "Unsuccessful CRAN package website read via read_html()"
+      return(list(c(pkg_name.i, NA, NA, NA, NA, e.note))) 
+    }
+    
+    ## Read links to package vignettes URL 
+    vignette.url.vec0 <- tryCatch({
+      html_nodes(read.html.out, "table:nth-child(5) tr:nth-child(2) td+ td")  %>% 
+        html_nodes(xpath = "./a") %>% 
+        html_attr("href")
+    }, error = function(e) { e })
+    if (inherits(vignette.url.vec0, "error")){
+      e.note <- "Unsuccessful package vignettes URL extract via html_nodes()"
+      return(list(c(pkg_name.i, NA, NA, NA, NA, e.note))) 
+    }
+    
+    cond <- (length(vignette.url.vec0) > 0)
+    cond <- cond & (all(grepl(pattern = "vignettes", vignette.url.vec0)))
+    if (!cond) return(list(c(pkg_name.i, 0, NA, NA, NA, NA))) 
+    vignette.url.vec <- paste0(pkg.url.prefix, "/", vignette.url.vec0)
+    
+    ## Iterate over vignettes and get count word
+    list.out <- list()
+    for (j in 1:length(vignette.url.vec)){
+      
+      # print(paste0("vignette: ", i))
+      vignette.name <- vignette.url.vec0[j]
+      url   <- vignette.url.vec[j]
+      
+      text <- tryCatch({
+        file_ext.tmp <- file_ext(url)
+        if (file_ext.tmp == "pdf"){
+          ## Read from PDF
+          rand.num <- round(runif(1) * 1000000)
+          pdf.path.tmp <- paste0(project.dir, "/data/vignettes_tmp/vignette_tmp", rand.num, ".pdf") 
+          download.file(url, pdf.path.tmp)
+          reader <- readPDF(control = list(text = "-layout"))
+          reader.out <- reader(elem = list(uri = pdf.path.tmp), language = "en", id = "id1")
+          file.remove(pdf.path.tmp)
+          reader.out$content
+        } else if (file_ext.tmp == "html") {
+          ## Read from HTML: extract text from paragraphs and r chunk code
+          out <- read_html(url)
+          paste0(c(html_text(html_nodes(out, "p")),
+                   html_text(html_nodes(out, ".r"))), collapse = " ")
+        } else {
+          stop()
+        }
+      },  error = function(e) { e })
+      if (inherits(text, "error")){
+        e.note <- "Unsuccessful vignette read (HTML/PDF)"
+        return(list(c(pkg_name.i, 1, vignette.name, url, NA, e.note))) 
+      }
+      
+      ## Clean parsed text
+      text_clean <- tryCatch({
+        text <- removeNumbers(text)
+        text <- removePunctuation(text)
+        text <- stripWhitespace(text)
+        text
+      },  error = function(e) { e })
+      if (inherits(text_clean, "error")){
+        e.note <- "Unsuccessful text cleaning"
+        return(list(c(pkg_name.i, 1, vignette.name, url,  NA, e.note))) 
+      }
+      
+      ## Text to words cnt
+      words.cnt <- tryCatch({
+        words <- unlist(stri_extract_all_words(text_clean))
+        words <- words[nchar(words) >= 3]
+        length(words)
+      },  error = function(e) { e })
+      if (inherits(words.cnt, "error")){
+        e.note <- "Unsuccessful text to word count conversion"
+        return(list(c(pkg_name.i, 1, vignette.name, url, NA, e.note))) 
+      }
+    
+      words.cnt <- length(words)
+      return.vec <- c(pkg_name.i, 1, vignette.name, url, words.cnt, NA)
+      list.out[[length(list.out) + 1]] <- return.vec
+    }
+    
+    return(list.out)
+    
+  }) 
+  
+}) 
+
+results <- lapply(results.f, value)
+t2 <- Sys.time()
+t2 - t1
+
+
+## Convert results list to a data frame 
+results.df0 <- lapply(results, function(ll){
+  ll <- do.call(rbind.data.frame, ll)
+  names(ll) <- c("pkg_name", "pkg_vig_any", "pkg_vig_name", "pkg_vig_url", 
+                 "words_cnt",  "error_msg")
+  ll
+})
+results.df <- do.call(rbind.data.frame, results.df0)
+
+results.df.FINAL <- 
+  results.df %>%
+  select(pkg_name, pkg_vig_any, pkg_vig_name, words_cnt) %>%
+  mutate(pkg_vig_any = as.numeric(pkg_vig_any),
+         words_cnt = as.numeric(words_cnt)) 
+
+
+##  ----------------------------------------------------------------------------
+## Save to file
+
+## 1 pkg_vignette_info_EXT.csv
+path.tmp <- file.path(project.dir, "data/pkg_vignette_info_EXT.csv")
+pkg_vignette_info_EXT <- read.csv(path.tmp, stringsAsFactors = FALSE)
+df_corr <- pkg_vignette_info_EXT
+
+df_corr[df_corr$pkg_name == "icesVocab", ] <- results.df[results.df$pkg_name == "icesVocab", ]
+df_corr[df_corr$pkg_name == "testassay", ] <- results.df[results.df$pkg_name == "testassay", ]
+# out.path <- file.path(project.dir, "data/pkg_vignette_info_EXT.csv")
+# write.csv(df_corr, out.path, row.names = FALSE, quote = FALSE)
+
+
+## 2 pkg_vignette_info.csv
+results.df.FINAL <- 
+  df_corr %>%
+  select(pkg_name, pkg_vig_any, pkg_vig_name, words_cnt) %>%
+  mutate(pkg_vig_any = as.numeric(pkg_vig_any),
+         words_cnt = as.numeric(words_cnt)) 
+# out.path <- file.path(project.dir, "data/pkg_vignette_info.csv")
+# write.csv(results.df.FINAL, out.path, row.names = FALSE, quote = FALSE)
+```
+
+
+
+
+# 2. Get info about manual
+
+```{r, eval = FALSE}
+
+# packageNames.vec <- pkg_first_rel$pkg_name[1:100]
+packageNames.vec <- pkg_first_rel$pkg_name
+# plan(sequential)
+plan(multisession, workers = parallel::detectCores() - 1)
+
+t1 <- Sys.time()
+results.f <- lapply(1:length(packageNames.vec), function(i) {
+  
+  future({
+  
+    pkg_name.i <- packageNames.vec[i]
+    url <- paste0("https://cran.r-project.org/web/packages/", pkg_name.i, "/", pkg_name.i, ".pdf")
+    
+    manual_pages_cnt <- tryCatch({
+      ## Download and read manual PDF
+      rand.num <- round(runif(1) * 1000000)
+      pdf.path.tmp <- paste0(project.dir, "/data/manuals_tmp/manual_tmp", rand.num, ".pdf") 
+      download.file(url, pdf.path.tmp)
+      reader <- readPDF(control = list(text = "-layout"))
+      reader.out <- reader(elem = list(uri = pdf.path.tmp), language = "en", id = "id1")
+      file.remove(pdf.path.tmp)
+      ## Page length
+      length(reader.out$content)
+    },  error = function(e) { e })
+    if (inherits(manual_pages_cnt, "error")){
+      return(c(pkg_name.i, NA)) 
+    }
+    return(c(pkg_name.i, manual_pages_cnt)) 
+  
+  })
+  
+})
+
+
+results <- lapply(results.f, value)
+# results <- results.f
+t2 <- Sys.time()
+t2 - t1
+
+##  ----------------------------------------------------------------------------
+## Convert results list to a data frame 
+results.df <- do.call(rbind.data.frame, results)
+names(results.df) <- c("pkg_name", "manual_pages_cnt") 
+head(results.df)
+
+##  ----------------------------------------------------------------------------
+## Save to file
+
+out.path <- file.path(project.dir, "data/pkg_manual_info.csv")
+write.csv(results.df, out.path, row.names = FALSE, quote = FALSE)
+
+```
+
+
+### Try to add these unsuccessfull at 1st attempt
+
+```{r, eval = FALSE}
+
+packageNames.vec <- c("rmda", "RTransProb", "Emcdf", "zip")
+
+plan(sequential)
+# plan(multisession, workers = parallel::detectCores() - 1)
+
+t1 <- Sys.time()
+results.f <- lapply(1:length(packageNames.vec), function(i) {
+  
+  future({
+  
+    pkg_name.i <- packageNames.vec[i]
+    url <- paste0("https://cran.r-project.org/web/packages/", pkg_name.i, "/", pkg_name.i, ".pdf")
+    
+    manual_pages_cnt <- tryCatch({
+      ## Download and read manual PDF
+      rand.num <- round(runif(1) * 1000000)
+      pdf.path.tmp <- paste0(project.dir, "/data/manuals_tmp/manual_tmp", rand.num, ".pdf") 
+      download.file(url, pdf.path.tmp)
+      reader <- readPDF(control = list(text = "-layout"))
+      reader.out <- reader(elem = list(uri = pdf.path.tmp), language = "en", id = "id1")
+      file.remove(pdf.path.tmp)
+      ## Page length
+      length(reader.out$content)
+    },  error = function(e) { e })
+    if (inherits(manual_pages_cnt, "error")){
+      return(c(pkg_name.i, NA)) 
+    }
+    return(c(pkg_name.i, manual_pages_cnt)) 
+  
+  })
+  
+})
+
+results <- lapply(results.f, value)
+# results <- results.f
+t2 <- Sys.time()
+t2 - t1
+
+##  ----------------------------------------------------------------------------
+## Convert results list to a data frame 
+results.df <- do.call(rbind.data.frame, results)
+names(results.df) <- c("pkg_name", "manual_pages_cnt") 
+head(results.df)
+
+
+##  ----------------------------------------------------------------------------
+## Save to file
+
+path.tmp <- file.path(project.dir, "data/pkg_manual_info.csv")
+pkg_manual_pages_cnt <- read.csv(path.tmp, stringsAsFactors = FALSE)
+
+for (packageNames.i in packageNames.vec){
+  pkg_manual_pages_cnt[pkg_manual_pages_cnt$pkg_name == packageNames.i, ] <- 
+    results.df[results.df$pkg_name == packageNames.i, ]
+}
+
+any(is.na(pkg_manual_pages_cnt$manual_pages_cnt))
+pkg_manual_pages_cnt$manual_pages_cnt <- as.numeric(pkg_manual_pages_cnt$manual_pages_cnt)
+summary(pkg_manual_pages_cnt$manual_pages_cnt)
+
+# out.path <- file.path(project.dir, "data/pkg_manual_info.csv")
+# write.csv(pkg_manual_pages_cnt, out.path, row.names = FALSE, quote = FALSE)
+
+
+```
+
+
+
+
+# Produce final data frame 
+
+### 1. Vignette info
+
+```{r}
+
+# path.tmp <- file.path(project.dir, "data/pkg_vignette_info_EXT.csv")
+# pkg_vignette_info_EXT <- read.csv(path.tmp, stringsAsFactors = FALSE)
+# table(pkg_vignette_info_EXT$error_msg)
+# any(is.na(pkg_vignette_info_EXT$pkg_vig_any))
+
+path.tmp <- file.path(project.dir, "data/pkg_vignette_info.csv")
+pkg_vignette_info <- read.csv(path.tmp, stringsAsFactors = FALSE)
+## Sanity checking
+any(is.na(pkg_vignette_info$pkg_vig_any))
+pkg_vignette_info %>% filter(pkg_vig_any == 1, is.na(words_cnt))
+
+df1 <- 
+  pkg_vignette_info %>%
+  group_by(pkg_name) %>%
+  summarize(vignette_any = max(pkg_vig_any),
+            vignette_cnt = sum(pkg_vig_any),
+            vignette_words_cnt_min = min(words_cnt),
+            vignette_words_cnt_max = max(words_cnt),
+            vignette_words_cnt_mean = mean(words_cnt),
+            vignette_words_cnt_median = median(words_cnt)) %>%
+  as.data.frame()
+
+
+```
+
+### 2. Manual info
+
+```{r}
+
+path.tmp <- file.path(project.dir, "data/pkg_manual_info.csv")
+pkg_manual_pages_cnt <- read.csv(path.tmp, stringsAsFactors = FALSE)
+
+## Sanity checking
+dim(pkg_manual_pages_cnt)
+head(pkg_manual_pages_cnt)
+any(is.na(pkg_manual_pages_cnt$manual_pages_cnt))
+
+# pkg_manual_pages_cnt %>% filter(manual_pages_cnt == min(manual_pages_cnt))
+# pkg_manual_pages_cnt %>% filter(manual_pages_cnt == max(manual_pages_cnt))
+
+df2 <- pkg_manual_pages_cnt
+
+```
+
+
+### Merge them all together
+
+```{r, eval = FALSE}
+
+dim(pkg_first_rel)
+
+df.out <- 
+  pkg_first_rel %>%
+  select(-first_release) %>%
+  left_join(df1, by = "pkg_name") %>%
+  left_join(df2, by = "pkg_name")
+
+dim(df.out)
+head(df.out)
+str(df.out)
+
+out.path <- file.path(project.dir, "data/feature_task/features_extracted_part3.csv")
+write.csv(df.out, out.path, row.names = FALSE, quote = FALSE)
+
+```
+
+

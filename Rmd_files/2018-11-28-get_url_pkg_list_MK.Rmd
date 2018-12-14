@@ -1,0 +1,271 @@
+---
+title: 'Get URL R packages FIRST VERSION'
+author: 
+- "Daniel Antiporta"
+- "Marta Karas"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+---
+
+```{r, include = FALSE}
+rm(list = ls())
+knitr::opts_chunk$set(include = TRUE, comment = NA, cache = TRUE, 
+                      message = FALSE, warning = FALSE)
+
+```
+
+* Define project folder `712-final_project` path. That is, modify `project.dir` string below; once it points to your `712-final_project` folder location, all other stuff below would work. 
+
+```{r}
+user.name<-Sys.info()[7]
+if(user.name=="antiporta") project.dir <- "/Users/antiporta/Dropbox/712-final_project/"
+if(user.name=="dantipor") project.dir <- "C://Users//dantipor//Dropbox//712-final_project/"
+if(user.name=="mkaras") project.dir <- "/Users/mkaras/Dropbox/JHU/711-ADV_DATA_SCIENCE/712-final_project/"
+```
+
+### Read `vector` with package name
+
+```{r}
+path.tmp <- file.path(project.dir, "data/pkg_name_SUBSET")
+pkg_name_vec <- dget(path.tmp)
+
+## Sanity check
+length(pkg_name_vec)
+
+## Preview
+head(pkg_name_vec)
+```
+
+### Get urls to download FIRST R Package Release
+
+```{r, eval = FALSE}
+
+library(rvest)
+library(ggplot2)
+library(dplyr)
+library(future)
+
+plan(multisession, workers = parallel::detectCores() - 1)
+
+# plan(sequential)
+
+t1 <- Sys.time()
+
+n <- length(pkg_name_vec)
+# n <- 50
+
+results.f <- lapply(1:n, function(i) {
+  future({
+    
+    ## Archive URL
+    name1 <- pkg_name_vec[i]
+    # name1 <- "leabRa"
+    url1 <- 'https://cran.r-project.org/src/contrib/Archive/'
+    url2 <- paste0(url1, name1, '/')
+    
+    ## Check if we can access Archive webpage
+    read_html_out <- tryCatch(read_html(url2), error = function(e) e) 
+    
+    # If error was thrown on read_html attempt, package does not have archive
+    if (inherits(read_html_out, "error")) {
+      message("no archive")
+      read_html_out.i <- "https://cran.r-project.org/web/packages/"
+      read_html_out.i <-paste0(read_html_out.i, pkg_name_vec[i],"/index.html")
+      firstRelease.i <- 
+        read_html(read_html_out.i) %>%
+        html_nodes("table:nth-child(5)") %>%
+        html_table(fill = TRUE) %>%
+        as.data.frame() %>% 
+        filter(grepl("source", X1), 
+               grepl("Package", X1)) %>%
+        select(X2) %>% 
+        slice(1) %>% 
+        unlist() %>%
+        as.character()
+      firstRelease.i <- paste0("src/contrib/", firstRelease.i)
+    
+    } else {
+      
+    # If package does have an archive
+       tryCatch({
+          pkg_first_name_i <- 
+            read_html_out %>%
+            html_nodes("table")  %>%
+            html_table(fill = TRUE) %>%
+            as.data.frame() %>%
+            select(Name) %>% 
+            filter(grepl("tar.gz", Name)) %>%
+            slice(1) %>%
+            unlist() %>%
+            as.character()
+            # filter(Name!="", 
+            #        Name!="Parent Directory") %>%
+            # filter(row_number()<2) %>% as.character
+          # firstRelease.i <- as.character(pkg_first_name_i)
+          firstRelease.i <- paste0("src/contrib/Archive/", 
+                                   pkg_name_vec[i], "/",
+                                   pkg_first_name_i)
+      }, error = function(e) {
+          firstRelease.i <- "NA"
+      })
+    }
+    
+    ## Store results for this particular package name
+    list(name1, firstRelease.i)
+  })
+})
+
+## Wrap up the results
+results <- lapply(results.f, value)
+t2 <- Sys.time()
+t2 - t1
+
+## Process
+results.list <- lapply(results, function(ll) unlist(ll))
+results.df <- as.data.frame(cbind(sapply(results.list,`[`,1), sapply(results.list,`[`,2)))
+names(results.df) <- c("name", "pkg_first")
+
+head(results.df)
+
+results.df$pkg_first<-paste0("https://cran.r-project.org/",
+  results.df$pkg_first)
+pkg_first_release_urls<-results.df
+
+## Save data frame with pkg_name, first_release
+out.path <- file.path(project.dir, "data/pkg_first_release_urls_MK.csv")
+write.csv(pkg_first_release_urls, 
+          out.path, row.names = FALSE, quote = FALSE)
+
+```
+
+
+# Compare Daniel's and Marta's
+
+```{r, eval = FALSE}
+out.path <- file.path(project.dir, "data/pkg_first_release_urls_MK.csv")
+release_urls_MK <- read.csv(out.path, stringsAsFactors = FALSE)
+head(release_urls_MK)
+
+out.path <- file.path(project.dir, "data/pkg_first_release_urls_DA.csv")
+release_urls_DA <- read.csv(out.path, stringsAsFactors = FALSE)
+head(release_urls_DA)
+
+all(release_urls_MK$name == release_urls_DA$name)
+all(release_urls_MK$pkg_first == release_urls_DA$pkg_first)
+
+all(grepl("\\.tar\\.gz$", release_urls_MK$pkg_first))
+
+```
+
+
+# Use the extracted URLs to download tar.gz files 
+
+```{r, eval = FALSE}
+
+library(rvest)
+library(ggplot2)
+library(dplyr)
+library(future)
+
+user.name<-Sys.info()[7]
+if(user.name=="dantipor") download.dir <- "C://Users//dantipor//Downloads//pkg_installation_targz//"
+if(user.name=="antiporta") download.dir <- "/Users/antiporta/Downloads/pkg_tar/"
+if(user.name=="mkaras") download.dir <- "/Users/mkaras/Documents/JHU/712-final_project_MY_WORKSPACE/data/pkg_installation_targz/"
+
+## Read data with URLS
+
+user.name<-Sys.info()[7]
+if(user.name=="dantipor") out.path <- file.path(project.dir, "data//pkg_first_release_urls_DA.csv")
+if(user.name!="dantipor") out.path <- file.path(project.dir, "data/pkg_first_release_urls_DA.csv")
+
+release_urls_DA <- read.csv(out.path, stringsAsFactors = FALSE)
+release_urls_vec <- release_urls_DA$pkg_first
+pkg_name_vec <- release_urls_DA$name
+
+plan(multisession, workers = parallel::detectCores() - 1)
+n <- length(release_urls_vec)
+# n <- 100
+
+t1 <- Sys.time()
+results.f <- lapply(1:n, function(i) {
+  future({
+    pkg_name.i <- pkg_name_vec[i]
+    release_url.i <- release_urls_vec[i]
+    destfile.i    <- paste0(download.dir, pkg_name.i, ".tar.gz")
+    tryCatch({
+      download.t1 <- Sys.time()
+      download.file(url = release_url.i, 
+                    destfile = destfile.i)
+      download.t2 <- Sys.time()
+      time.i <- as.numeric(download.t2 - download.t1, units = "secs")
+      file.size.i <- file.size(destfile.i)  ##  File size in bytes.
+      return(list(pkg_name.i, TRUE, time.i, file.size.i))
+    }, 
+    error = function(e){
+      return(list(pkg_name.i, FALSE, NA, NA))
+    }) 
+    NULL
+  })
+})
+
+## Wrap up the results
+results <- lapply(results.f, value)
+t2 <- Sys.time()
+as.numeric(t2 - t1, units = "secs")
+
+## Process
+results.list <- lapply(results, function(ll) unlist(ll))
+options(stringsAsFactors = FALSE)
+results.df <- do.call(rbind.data.frame, results.list)
+names(results.df) <- c("pkg_name", "pkg_download_successful", "pkg_download_time", "pkg_download_targz_size")
+results.df$pkg_download_time <- as.numeric(as.character(results.df$pkg_download_time))
+
+head(results.df)
+plot(results.df$pkg_download_time, results.df$pkg_download_targz_size,
+     xlab = "Download time [sek]",
+     ylab = "Downloaded tar.gz file size [in bytes]")
+
+## Save data frame with pkg_name, first_release
+out.path <- file.path(project.dir, "data/pkg_first_release_download_status.csv")
+write.csv(results.df, 
+          out.path, row.names = FALSE, quote = FALSE)
+
+
+```
+
+
+# Use the extracted URLs to download tar.gz files 
+
+```{r}
+# Unpack tar.gz files
+user.name<-Sys.info()[7]
+if(user.name=="antiporta"){
+  targz.dir <- "/Users/antiporta/Downloads/pkg_tar"
+  target.dir <- "/Users/antiporta/Downloads/pkg_untar"
+} 
+if(user.name=="mkaras") {
+targz.dir <- "/Users/mkaras/Documents/JHU/712-final_project_MY_WORKSPACE/data/pkg_installation_targz/"
+target.dir <- "/Users/mkaras/Documents/JHU/712-final_project_MY_WORKSPACE/data/pkg_installation_dir/"
+}
+## Sanity check
+targz.files <- list.files(targz.dir)
+targz.files0 <- gsub(".tar.gz", replacement = "", targz.files)
+all(sapply(pkg_name_vec, function(pkg_name.i) pkg_name.i %in% targz.files0))
+
+for (pkg_name.i in pkg_name_vec){
+  tarfile.i <- paste0(targz.dir, pkg_name.i, ".tar.gz")
+  untar(tarfile = tarfile.i, exdir = target.dir)
+}
+
+
+```
+
+
+
+
+
+
+

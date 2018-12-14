@@ -1,0 +1,48 @@
+---
+title: 'Get time of installation R packages FIRST VERSION'
+author: "Daniel Antiporta"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+---
+
+```{r, include = FALSE}
+rm(list = ls())
+knitr::opts_chunk$set(include = TRUE, comment = NA, cache = TRUE, 
+                      message = FALSE, warning = FALSE)
+
+```
+
+* Define project folder `712-final_project` path. That is, modify `project.dir` string below; once it points to your `712-final_project` folder location, all other stuff below would work. 
+
+```{r}
+user.name<-Sys.info()[7]
+if(user.name=="antiporta") project.dir <- "/Users/antiporta/Dropbox/712-final_project/"
+if(user.name=="dantipor") project.dir <- "C://Users//dantipor//Dropbox//712-final_project//"
+if(user.name=="mkaras") project.dir <- "/Users/mkaras/Dropbox/JHU/711-ADV_DATA_SCIENCE/712-final_project/"
+```
+
+### Read `csv` file with package name files in LOCAL computer
+```{r, eval = FALSE}
+library(future)
+library(devtools)
+out.path <- file.path(project.dir, "data/pkg_first_release_urls_DA.csv")
+release_urls_DA <- read.csv(out.path, stringsAsFactors = FALSE)
+user.name<-Sys.info()[7]
+if(user.name=="antiporta"){
+  path.pkgs.files <- "/Users/antiporta/Downloads/pkg_tar"
+} 
+
+d <- tempdir()
+for (i in 1:5){
+  untar(paste0("/Users/antiporta/Downloads/pkg_tar/", release_urls_DA$name[i], ".tar.gz"), 
+      compressed="gzip", exdir=d)
+  devtools::install(file.path(d, release_urls_DA$name[i]), dependencies=TRUE,
+                  repos="https://cloud.r-project.org/", 
+                  upgrade = "never",
+                  build_vignettes = FALSE)
+}
+
+```

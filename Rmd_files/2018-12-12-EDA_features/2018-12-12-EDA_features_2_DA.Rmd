@@ -1,0 +1,164 @@
+---
+title: 'EDA summary for Features 2'
+author: 
+- "Daniel Antiporta"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: 
+  html_document:
+    toc: false
+    toc_depth: 3
+---
+
+
+```{r, include = FALSE}
+rm(list = ls())
+knitr::opts_chunk$set(include = TRUE, comment = NA, cache = TRUE, 
+                      message = FALSE, warning = FALSE)
+
+```
+
+* Define project folder `712-final_project` path. That is, modify `project.dir` string below; once it points to your `712-final_project` folder location, all other stuff below would work. 
+
+```{r}
+user.name<-Sys.info()[7]
+if(user.name=="antiporta") project.dir <- "/Users/antiporta/Dropbox/712-final_project/"
+if(user.name=="dantipor") project.dir <- "C://Users//dantipor//Dropbox//712-final_project/"
+if(user.name=="mkaras") project.dir <- "/Users/mkaras/Dropbox/JHU/711-ADV_DATA_SCIENCE/712-final_project/"
+library(rvest)
+library(ggplot2)
+library(dplyr)
+library(future)
+library(readr)
+library(stringr)
+library(fastDummies)
+library(janitor)
+```
+
+# Read data 
+
+```{r}
+
+out.path <- file.path(project.dir, "data/final_dfs/data_x.csv")
+x_df0 <- read.csv(out.path, stringsAsFactors = FALSE)
+# head(x_df0)
+
+out.path <- file.path(project.dir, "data/final_dfs/data_y.csv")
+y_df0 <- read.csv(out.path, stringsAsFactors = FALSE)
+# head(y_df0)
+
+```
+
+# Mutate data 
+
+### Create subset of columns of `x` data which will be used in modelling
+
+```{r}
+# apply(x_df0, 2, function(col) any(is.na(col)))
+x_df0 <- 
+  x_df0 %>% 
+  select(-pkg_name,
+         -rversion_min)
+
+names(x_df0)[apply(x_df0, 2, function(col) any(is.na(col)))]
+x_df0[is.na(x_df0)] <- 0
+names(x_df0)[apply(x_df0, 2, function(col) any(is.na(col)))]
+x_df <- x_df0
+```
+
+
+### Create dummy variables for subset of columns of `x`
+
+```{r}
+## x_df_license_group
+x_df_license_group <- x_df %>% select(license_group)
+x_df_license_group_DUMMY <- 
+  dummy_cols(x_df_license_group,
+             remove_most_frequent_dummy = TRUE) %>%
+  select(-license_group)
+x_df_license_group_DUMMY <- as.data.frame(clean_names(x_df_license_group_DUMMY))
+x_df <- cbind(x_df %>% select(-license_group),
+              x_df_license_group_DUMMY)
+# x_df <- scale(x_df, center = TRUE, scale = TRUE)
+x_df <- as.data.frame(x_df)
+
+## Sanity check
+table(sapply(x_df, class))
+
+```
+
+### Mutate columns of `y` 
+
+```{r}
+y_df <- 
+  y_df0 %>%
+  select(-pkg_name) %>%
+  mutate(download_cnt_90d_LOG = log(download_cnt_90d),
+         download_cnt_365d_LOG = log(download_cnt_365d))
+# y_df <- scale(y_df, center = TRUE, scale = TRUE)
+y_df <- as.data.frame(y_df)
+data_df <- cbind(y_df, x_df)
+
+```
+
+
+# Package d
+
+- any vignette
+
+```{r EDA_Roxygen, fig.width=6, fig.height=4}
+
+
+data_df$roxygen_yn <- 
+  factor(as.character(data_df$roxygen_yn),
+         levels = c(1,0),
+         labels  = c("Yes", "No"))
+prop.table(table(data_df$roxygen_yn))
+gg.base_size <- 12
+ggplot(data_df,
+       aes(x = as.factor(roxygen_yn), 
+           y = download_cnt_365d_LOG,
+           group = as.factor(roxygen_yn),
+           fill = as.factor(roxygen_yn))) +
+  scale_fill_manual(values = c("green", "grey")) + 
+  geom_boxplot(color = "black", alpha = 0.6) + 
+  theme_bw(base_size = gg.base_size) + 
+  labs(title = "Boxplot of log(# of downloads over 1y) of packages\nstratified by whether or not\na package was created using Roxygen",
+       x = "Roxygen",
+       y = "log(# of downloads over 1y)") + 
+  theme(legend.position = "none") 
+
+```
+
+```{r bar_graph_lic, fig.width= 6, fig.height=5}
+license_group<-readRDS(paste0(project.dir,
+                               "/Rmd_files/2018-11-25-feature_task_part2/license_group"))
+prop.table(table(license_group$V1))
+
+p1<-license_group %>%
+  ggplot(aes(V1))+
+  geom_bar(color="black", fill="#f8766d", alpha=0.7) +
+  theme_bw() +
+  labs(x="License Type",
+       y="Count",
+       title="Barplot of packages count \nby License Type, N=2,325" )+
+  theme(axis.text.x = element_text(colour="grey20",size=8,hjust=.5,face="bold",angle = 90),
+        plot.title = element_text(hjust = 0, size=16), 
+        axis.text.y = element_text(colour="grey20",size=8,hjust=.5,face="bold")) 
+p1 +  geom_text(aes(y=count+50, label=count), size=4, fontface=0)
+```
+
+```{r bar_graph_nauthor, fig.width= 6, fig.height=5}
+authors.df_final<-readRDS(paste0(project.dir,
+                               "/Rmd_files/2018-11-25-feature_task_part2/authors.df_final"))
+prop.table(table(authors.df_final$n_authors))
+p2<-ggplot(authors.df_final, aes(n_authors))+
+  geom_bar(fill="#f8766d", alpha=0.7, color="black") +
+  theme_bw() +
+  labs(x="Number of Authors",
+       y="Count",
+       title="Barplot of packages count \nby number of Authors, N=2,325" )+
+  theme(axis.text.x = element_text(colour="grey20",size=8,hjust=.5,face="bold"),
+        plot.title = element_text(hjust = 0, size=16), 
+        axis.text.y = element_text(colour="grey20",size=8,hjust=.5,face="bold")) 
+p2 
+```

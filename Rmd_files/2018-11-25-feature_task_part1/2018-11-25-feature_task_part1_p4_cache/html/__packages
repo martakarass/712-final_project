@@ -1,0 +1,12 @@
+base
+xml2
+rvest
+ggplot2
+dplyr
+future
+stringi
+NLP
+tm
+RColorBrewer
+wordcloud
+bindrcpp

@@ -1,0 +1,233 @@
+---
+title: 'Features engineering: Outcome'
+author: 
+- "Daniel Antiporta"
+- "Marta Karas"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: 
+  html_document:
+    toc: false
+    toc_depth: 3
+---
+
+
+```{r, include = FALSE}
+rm(list = ls())
+knitr::opts_chunk$set(include = TRUE, comment = NA, cache = TRUE, 
+                      message = FALSE, warning = FALSE)
+
+library(tidyverse)
+library(reshape2)
+
+```
+
+* Define project folder `712-final_project` path. That is, modify `project.dir` string below; once it points to your `712-final_project` folder location, all other stuff below would work. 
+
+```{r}
+user.name<-Sys.info()[7]
+if(user.name=="antiporta") project.dir <- "/Users/antiporta/Dropbox/712-final_project/"
+if(user.name=="mkaras") project.dir <- "/Users/mkaras/Dropbox/JHU/711-ADV_DATA_SCIENCE/712-final_project/"
+```
+
+
+### Read `data.frame` with package name, package first release 
+
+```{r}
+path.tmp <- file.path(project.dir, "data/pkg_first_release_SUBSET.csv")
+pkg_first_rel <- read.csv(path.tmp, stringsAsFactors = FALSE)
+pkg_first_rel$first_release <- as.Date(pkg_first_rel$first_release)
+  
+## Sanity check
+range(pkg_first_rel$first_release)
+dim(pkg_first_rel)
+
+## Preview
+head(pkg_first_rel)
+```
+
+### Read `vector` with package name
+
+```{r}
+path.tmp <- file.path(project.dir, "data/pkg_name_SUBSET")
+pkg_name_vec <- dget(path.tmp)
+
+## Sanity check
+length(pkg_name_vec)
+
+## Preview
+head(pkg_name_vec)
+```
+
+### Get information from ALL pkgs in the subset
+```{r, eval=FALSE, message=FALSE, warning=FALSE}
+#Get Downloads by Day 
+#Pkg in Github to get info about downloads ["cranlogs"] (Option 1)
+#NOTE: gives you data since the "from" point even if the pkg was not released, cross validation with date of first released.
+
+if (!("cranlogs" %in% rownames(installed.packages()))){
+  library(devtools)
+  install_github("metacran/cranlogs")
+}
+library(cranlogs)
+
+
+downloads.bydate.FINAL <- data.frame()
+for (i in seq(1, 2301, by = 100)){
+  message(i)
+  idx <- i : min((i + 99), length(pkg_name_vec))
+  downloads.bydate.i <- cran_downloads(pkg_name_vec[idx], 
+                                       from = "2016-10-01", 
+                                       to = "2018-10-31")
+  downloads.bydate.FINAL <- rbind(downloads.bydate.FINAL, downloads.bydate.i)
+  message(dim(downloads.bydate.FINAL))
+}
+
+#Sanity check
+length(unique(downloads.bydate$package))
+
+#Save
+saveRDS(downloads.bydate.FINAL, 
+        file = paste0(project.dir,
+    "Rmd_files/2018-11-27-feature_task_outcome/downloads_pkgs_bydate"))
+
+#Need to ADD date of First Release
+
+#Pkg in CRAN to get info about downloads ["dlstats"] (Option 2) 
+#[NOTE: it takes way more time than Option 1 and gives monthly data]
+#if (!("dlstats" %in% rownames(installed.packages()))){
+#  install.packages("dlstats")
+#}
+#library(dlstats)
+#dlstats::cran_stats(pkg_name_vec)
+
+```
+
+
+# Generate outcome data frames
+
+```{r}
+
+file.path <- paste0(project.dir, "Rmd_files/2018-11-27-feature_task_outcome/downloads_pkgs_bydate")
+downloads_pkgs <- read_rds(file.path)
+names(downloads_pkgs) <- c("download_date", "download_cnt", "pkg_name")
+
+dim(downloads_pkgs)
+head(downloads_pkgs)
+range(downloads_pkgs$download_date)
+
+outcome.df0 <- 
+  pkg_first_rel %>% 
+  left_join(downloads_pkgs, by= "pkg_name") %>%
+  mutate(release_download_diff = as.numeric(as.Date(download_date) - as.Date(first_release), units = "days")) %>%
+  filter(release_download_diff >= 0, release_download_diff <= 365)
+
+## Sanity check (that we have same num of observations per package)
+unique(table(outcome.df0$pkg_name))
+
+```
+
+
+## Some exploratory plots
+
+### Aggregate per 90 days and per 365 days
+
+```{r}
+outcome.df_90 <- 
+  outcome.df0 %>%
+  filter(release_download_diff <= 90) %>%
+  group_by(pkg_name) %>%
+  summarize(download_cnt_90d = sum(download_cnt))
+
+outcome.df_365 <- 
+  outcome.df0 %>%
+  filter(release_download_diff <= 365) %>%
+  group_by(pkg_name) %>%
+  summarize(download_cnt_365d = sum(download_cnt))
+
+outcome.df <- 
+  pkg_first_rel %>%
+  left_join(outcome.df_90, by = "pkg_name") %>%
+  left_join(outcome.df_365, by = "pkg_name") %>%
+  select(-first_release)
+
+```
+
+
+```{r EDA_outcome, fig.width=5, fig.height=4}
+
+gg.base_size <- 10
+
+outcome.df.m <-
+  outcome.df %>%
+  select(download_cnt_90d, download_cnt_365d) %>%
+  melt()
+
+ggplot(outcome.df.m, aes(x = variable, y = value)) + 
+  geom_boxplot() + 
+  labs(title = "Boxplot of # downloads over time window (90/365 days)",
+       x = "Outcome variable") + 
+  theme_gray(base_size = gg.base_size) 
+
+ggplot(outcome.df.m, aes(x = variable, y = value)) + 
+  geom_boxplot() + 
+  labs(title = "Boxplot of # downloads over time window (90/365 days)\n(y-axis limited)",
+       x = "Outcome variable") + 
+    coord_cartesian(ylim = c(0, 30000)) +  
+  theme_gray(base_size = gg.base_size)
+
+ggplot(outcome.df.m, aes(x = variable, y = log(value))) + 
+  geom_boxplot() + 
+  labs(title = "Boxplot of log(# downloads) over time window (90/365 days)",
+       x = "Outcome variable") +   
+  theme_gray(base_size = gg.base_size)
+
+
+```
+
+
+## Save outcome data frames
+
+```{r, eval = FALSE}
+
+out.path <- file.path(project.dir, "data/final_dfs/data_y.csv")
+write.csv(outcome.df, out.path, row.names = FALSE, quote = FALSE)
+
+## construct common data frame for all the past ones 
+dir.path <- file.path(project.dir, "data/feature_task/")
+dir.list.files <- list.files(dir.path, full.names = TRUE)
+
+dim.sum <- 0
+for (file.path.i in dir.list.files){
+  message(file.path.i)
+  file.i <- read.csv(file.path.i, stringsAsFactors = FALSE)
+  print(dim(file.i))
+  print(head(file.i))
+  dim.sum <- dim.sum + dim(file.i)[2]
+}
+dim.sum
+
+## Combine all these 
+
+df.X.FINAL <- pkg_first_rel 
+for (file.path.i in dir.list.files){
+  message(file.path.i)
+  file.i <- read.csv(file.path.i, stringsAsFactors = FALSE)
+  df.X.FINAL <- 
+    df.X.FINAL %>%
+    left_join(file.i, by = "pkg_name")
+    print(dim(df.X.FINAL))
+}
+
+df.X.FINAL <- df.X.FINAL %>% select(-first_release)
+
+
+out.path <- file.path(project.dir, "data/final_dfs/data_x.csv")
+write.csv(df.X.FINAL, out.path, row.names = FALSE, quote = FALSE)
+
+```
+
+
+
+
+
+

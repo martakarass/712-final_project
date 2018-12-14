@@ -1,0 +1,432 @@
+---
+title: 'Modeling: support vector machine (outcome: log 365d downloads)'
+author: 
+- "Perry Kuo"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: 
+  html_document:
+    toc: false
+    toc_depth: 3
+---
+
+
+```{r, include = FALSE}
+rm(list = ls())
+knitr::opts_chunk$set(include = TRUE, comment = NA, cache = TRUE, 
+                      message = FALSE, warning = FALSE)
+
+```
+
+* Define project folder `712-final_project` path. That is, modify `project.dir` string below; once it points to your `712-final_project` folder location, all other stuff below would work. 
+
+```{r}
+user.name <- Sys.info()[7]
+if(user.name=="antiporta") project.dir <- "/Users/antiporta/Dropbox/712-final_project/"
+if(user.name=="mkaras") project.dir <- "/Users/mkaras/Dropbox/JHU/711-ADV_DATA_SCIENCE/712-final_project/"
+if(user.name=="kuop2") project.dir <- "C:/Users/kuop2/Desktop/712-final_project"
+if(user.name=="pkuo6") project.dir <- "C:/Users/pkuo6/Desktop/712-final_project"
+
+library(caret)
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+library(fastDummies)
+library(janitor)
+library(e1071)
+library(kableExtra)
+```
+
+
+# Read data 
+
+```{r}
+
+out.path <- file.path(project.dir, "data/final_dfs/data_x.csv")
+x_df0 <- read.csv(out.path, stringsAsFactors = FALSE)
+# head(x_df0)
+
+out.path <- file.path(project.dir, "data/final_dfs/data_y.csv")
+y_df0 <- read.csv(out.path, stringsAsFactors = FALSE)
+# head(y_df0)
+
+```
+
+# Mutate data 
+
+### Create subset of columns of `x` data which will be used in modelling
+
+```{r}
+# apply(x_df0, 2, function(col) any(is.na(col)))
+x_df0 <- 
+  x_df0 %>% 
+  select(-pkg_name,
+         -rversion_min)
+
+names(x_df0)[apply(x_df0, 2, function(col) any(is.na(col)))]
+x_df0[is.na(x_df0)] <- 0
+names(x_df0)[apply(x_df0, 2, function(col) any(is.na(col)))]
+x_df <- x_df0
+```
+
+
+### Create dummy variables for subset of columns of `x`
+
+```{r}
+## x_df_license_group
+x_df_license_group <- x_df %>% select(license_group)
+x_df_license_group_DUMMY <- 
+  dummy_cols(x_df_license_group,
+             remove_most_frequent_dummy = TRUE) %>%
+  select(-license_group)
+x_df_license_group_DUMMY <- as.data.frame(clean_names(x_df_license_group_DUMMY))
+x_df <- cbind(x_df %>% select(-license_group),
+              x_df_license_group_DUMMY)
+
+x_df <- scale(x_df, center = TRUE, scale = TRUE)
+x_df <- as.data.frame(x_df)
+
+## Sanity check
+table(sapply(x_df, class))
+
+```
+
+### Mutate columns of `y` 
+
+```{r}
+y_df <- 
+  y_df0 %>%
+  select(-pkg_name) %>%
+  mutate(download_cnt_90d_LOG = log(download_cnt_90d),
+         download_cnt_365d_LOG = log(download_cnt_365d))
+# y_df <- scale(y_df, center = TRUE, scale = TRUE)
+y_df <- as.data.frame(y_df)
+
+```
+
+
+### Create data split 
+
+```{r}
+set.seed(56299)
+trainIndex <- createDataPartition(y_df$download_cnt_365d, 
+                                  p = 0.7, 
+                                  list = FALSE, 
+                                  times = 1)
+head(trainIndex[, 1], 100)
+mean(head(trainIndex[, 1], 100))
+
+## Define the train and test set                                  
+x_df_TRAIN <- x_df[trainIndex, ]
+x_df_TEST  <- x_df[-trainIndex, ]
+y_df_TRAIN <- y_df[trainIndex, ]
+y_df_TEST  <- y_df[-trainIndex, ]
+
+dim(x_df_TRAIN); dim(x_df_TEST)
+dim(y_df_TRAIN); dim(y_df_TEST)
+
+```
+
+
+
+# Model outcome: `download_cnt_365d_LOG`
+
+- Model-specific objects
+
+```{r}
+
+## Data 
+train_set_1 <- cbind(y_df_TRAIN %>% select(y = download_cnt_365d_LOG),
+                     x_df_TRAIN) 
+train_set_1 <- 
+  train_set_1 %>%
+  select(-starts_with("license_"))
+
+test_set_1 <- cbind(y_df_TEST %>% select(y = download_cnt_365d_LOG),
+                    x_df_TEST)
+test_set_1 <- 
+  test_set_1 %>%
+  select(-starts_with("license_"))
+
+## Model
+model_1 <- lm(data = train_set_1, formula = y ~ .)
+
+```
+
+
+### SVM fit: `svmLinear`
+
+* Continue with cv only, but use some wider grid of params.
+
+* We start with using a random parameter. Here, we use tuneLength = 10 random values.
+
+```{r model_1a, eval = FALSE}
+
+set.seed(56299)
+
+train_control <- trainControl(method = "cv", 
+                              number = 10)
+t1 <- Sys.time()
+model_1_svmLinear <- train(formula(model_1), 
+                       data = train_set_1, 
+                       method = "svmLinear",
+                       trControl = train_control,
+                       preProcess = c("center", "scale"),
+                       tuneLength = 100)
+t2 <- Sys.time()
+t2 - t1
+
+res.df <- model_1_svmLinear$results
+# head(res.df %>% arrange(RMSE))
+
+model_1_svmLinear$results %>% 
+  arrange(desc(-RMSE)) %>%
+  head(.,10) %>%
+  kable() %>%
+  kable_styling()
+
+#   C     RMSE   Rsquared       MAE    RMSESD RsquaredSD      MAESD
+# 1 1	 0.9313558 0.0934153	 0.5118039	 0.3893672	 0.0633279	 0.0757307
+
+
+```
+
+- Ok, so for linear SVM there is no more than one parameter, really :D
+
+* Tune the parameter.
+
+```{r model_svm_linear_grid, eval = FALSE}
+
+set.seed(56299)
+
+
+train_control <- trainControl(method = "cv", 
+                              number = 10)
+
+# grid <- expand.grid(C = c(1:101,by = 10) ) # more than 2 hours!!!
+
+grid <- expand.grid(C = c(1:10)) 
+
+t3 <- Sys.time()
+model_1_svmLinear_grid <- train(formula(model_1), 
+                       data = train_set_1, 
+                       method = "svmLinear",
+                       tuneGrid = grid,
+                       trControl = train_control,
+                       preProcess = c("center", "scale"),
+                       tuneLength = 100)
+t4 <- Sys.time()
+t4 - t3
+
+res.df <- model_1_svmLinear$results
+head(res.df %>% arrange(RMSE))
+
+model_1_svmLinear_grid$results %>% 
+  arrange(desc(-RMSE)) %>%
+  head(.,10) %>%
+  kable() %>%
+  kable_styling()
+```
+
+
+```{r  model_svm_linear_grid_plot, eval=FALSE}
+plot(model_1_svmLinear_grid)
+
+```
+
+### SVM fit: `svmRadial` 
+
+```{r model_svm_radial, eval = FALSE}
+
+set.seed(123)
+
+train_control <- trainControl(method = "cv", 
+                              number = 10)
+
+t1 <- Sys.time()
+model_1_svmRadial <- train(formula(model_1), 
+                       data = train_set_1, 
+                       method = "svmRadial",
+                       trControl = train_control,
+                       preProcess = c("center", "scale"),
+                       tuneLength = 10)
+t2 <- Sys.time()
+t2 - t1
+
+res.df <- model_1_svmRadial$results
+head(res.df %>% arrange(RMSE))
+
+#         sigma    C      RMSE  Rsquared       MAE     RMSESD RsquaredSD      MAESD
+# 1 0.004142518  4.0 0.7864176 0.1270128 0.4932235 0.07287218 0.05967873 0.03996969
+# 2 0.004142518  8.0 0.7886525 0.1270182 0.5064152 0.06645040 0.06376628 0.03715201
+# 3 0.004142518  2.0 0.7889015 0.1254899 0.4847415 0.07906852 0.05117714 0.04013745
+# 4 0.004142518  1.0 0.7953519 0.1219509 0.4796838 0.08419801 0.04526165 0.04042850
+# 5 0.004142518 16.0 0.7971806 0.1245679 0.5212986 0.05684058 0.06832011 0.03483424
+# 6 0.004142518  0.5 0.8037667 0.1206232 0.4772253 0.08894017 0.04283410 0.04055042
+
+```
+
+
+```{r model_svm_radial_grid1, eval = FALSE}
+
+grid01 <- expand.grid(sigma = c(1:10)/1000,
+                    C = c(1:40)/10)
+set.seed(123)
+
+train_control <- trainControl(method = "cv", 
+                              number = 10)
+
+t7 <- Sys.time()
+model_1_svmRadial_grid01 <- train(formula(model_1), 
+                       data = train_set_1, 
+                       method = "svmRadial",
+                       tuneGrid = grid01,
+                       trControl = train_control,
+                       preProcess = c("center", "scale"),
+                       tuneLength = 100)
+t8 <- Sys.time()
+t8 - t7
+# Time difference of 32.68817 mins
+
+res.df <- model_1_svmRadial_grid01$results
+head(res.df %>% arrange(RMSE))
+
+```
+
+```{r  model_svm_radial_grid1_plot, eval = FALSE}
+model_1_svmRadial_grid01$results %>% 
+  arrange(desc(-RMSE)) %>%
+  head(.,10) %>%
+  kable() %>%
+  kable_styling()
+
+plot(model_1_svmRadial_grid01)
+```
+
+```{r model_svm_radial_grid2, eval = FALSE, cache=TRUE}
+
+grid01 <- expand.grid(sigma = c(30:40)/10000,
+                    C = c(45:55)/100)
+set.seed(123)
+
+train_control <- trainControl(method = "cv", 
+                              number = 10)
+
+t9 <- Sys.time()
+model_1_svmRadial_grid02 <- train(formula(model_1), 
+                       data = train_set_1, 
+                       method = "svmRadial",
+                       tuneGrid = grid01,
+                       trControl = train_control,
+                       preProcess = c("center", "scale"),
+                       tuneLength = 100)
+t10 <- Sys.time()
+t10 - t9
+# Time difference of 20.06931 mins 
+
+res.df <- model_1_svmRadial_grid02$results
+head(res.df %>% arrange(RMSE))
+
+#   sigma   C      RMSE   Rsquared       MAE     RMSESD RsquaredSD      MAESD
+# 1 0.0033 0.53 0.6665542 0.07206463 0.4589384 0.09702114 0.04368157 0.02436655
+# 2 0.0033 0.54 0.6665568 0.07197168 0.4590096 0.09697926 0.04358042 0.02437365
+# 3 0.0033 0.52 0.6665569 0.07215393 0.4588579 0.09705393 0.04373884 0.02434863
+# 4 0.0034 0.51 0.6665612 0.07216867 0.4587972 0.09712722 0.04370221 0.02433999
+# 5 0.0034 0.52 0.6665632 0.07206929 0.4588799 0.09708861 0.04364388 0.02435200
+# 6 0.0033 0.51 0.6665640 0.07223102 0.4587794 0.09708975 0.04380084 0.02433721
+```
+
+```{r  model_svm_radial_grid2_plot, eval = FALSE}
+model_1_svmRadial_grid02$results %>% 
+  arrange(desc(-RMSE)) %>%
+  head(.,10) %>%
+  kable() %>%
+  kable_styling()
+
+plot(model_1_svmRadial_grid02)
+```
+
+- Refit above with selected params 
+
+```{r model_1_svm_fit, eval=TRUE}
+
+set.seed(123)
+
+train_control <- trainControl(method = "cv", 
+                              number = 10)
+
+tuneGrid <- expand.grid(.sigma = 0.00414, 
+                        .C = 4)
+
+t1 <- Sys.time()
+model_1_svmRadial <- train(formula(model_1), 
+                       data = train_set_1, 
+                       method = "svmRadial",
+                       trControl = train_control,
+                       preProcess = c("center", "scale"),
+                       tuneGrid = tuneGrid)
+t2 <- Sys.time()
+t2 - t1
+# Time difference of 12.14971 secs
+
+res.df <- model_1_svmRadial$results
+head(res.df %>% arrange(RMSE))
+
+
+model_1_svmRadial_FINAL <- model_1_svmRadial
+
+```
+
+
+### Fit to the test data 
+
+```{r model_svm_download_cnt_365d_LOG, fig.width= 6, fig.height=5, eval = TRUE}
+
+model_1_pred <- predict(model_1_svmRadial_FINAL,
+                        newdata = test_set_1[, -1])
+
+plt.df <- data.frame(pred = model_1_pred, obs = test_set_1[, 1])
+
+resid.tmp <- plt.df$obs - plt.df$pred
+SS.total      <- sum((plt.df$obs - mean(plt.df$obs))^2)
+SS.regression <- sum((plt.df$pred-mean(plt.df$obs))^2)
+SS.residual   <- sum(resid.tmp^2)
+r2.tmp <- SS.regression/SS.total
+MSE.tmp <- mean((resid.tmp)^2)
+
+### plot 1
+ggplot(plt.df, aes(x = obs, y = pred)) + 
+  geom_point(alpha = 0.7) + 
+  labs(title = paste0("Predictions for y = log(# of downloads in 1 year)"),
+  	   subtitle= bquote("MSE: "~ .(round(MSE.tmp, 3))~
+  	                      ","~r^{2}~": "~ .(round(r2.tmp, 3))),
+       # caption = paste0("Model: ", (gsub("model360_", "", names(plt.df.360[i])))),
+       x = "observed",
+       y = "predicted") + 
+  geom_abline(intercept = 0, slope = 1, color="red", 
+              linetype="dashed", size=1.5) + 
+  theme_gray(base_size = 12)
+
+
+## plot 2
+plt.df$resid <- resid.tmp
+
+ggplot(plt.df, aes(x = obs, y = resid)) + 
+  geom_point(alpha = 0.7) + 
+  labs(title = paste0("Model residuals for y = log(# of downloads in 1 year)"),
+  	   subtitle= bquote("MSE: "~ .(round(MSE.tmp, 3))~
+  	                      ","~r^{2}~": "~ .(round(r2.tmp, 3))),
+       # caption = paste0("Model: ", (gsub("model360_", "", names(plt.df.360[i])))),
+       x = "observed",
+       y = "residual (y - hat{y})") + 
+  geom_abline(intercept = 0, slope = 0, color="red", 
+              linetype="dashed", size=1.5) + 
+  theme_gray(base_size = 12)
+
+
+```
+
+
+
+
+
+

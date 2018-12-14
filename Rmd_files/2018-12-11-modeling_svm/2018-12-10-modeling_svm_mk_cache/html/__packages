@@ -1,0 +1,9 @@
+base
+lattice
+ggplot2
+caret
+dplyr
+reshape2
+fastDummies
+janitor
+bindrcpp

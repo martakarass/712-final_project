@@ -1,0 +1,129 @@
+---
+title: 'Access packages subset'
+author: 
+-"Marta Karas"
+-"Daniel Antiporta"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: 
+  html_document:
+    toc: false
+    toc_depth: 3
+---
+
+
+```{r, include = FALSE}
+rm(list = ls())
+knitr::opts_chunk$set(include = TRUE, comment = NA, cache = FALSE, 
+                      message = FALSE, warning = FALSE)
+
+```
+
+* Define project folder `712-final_project` path. That is, modify `project.dir` string below; once it points to your `712-final_project` folder location, all other stuff below would work. 
+
+```{r}
+user.name<-Sys.info()[7]
+if(user.name=="antiporta") project.dir <- "/Users/antiporta/Dropbox/712-final_project/"
+if(user.name=="mkaras") project.dir <- "/Users/mkaras/OneDrive - JHSPH/JHU/711-ADV_DATA_SCIENCE/712-final_project"
+```
+
+
+### Read `data.frame` with package name, package first release 
+
+```{r}
+path.tmp <- file.path(project.dir, "data/pkg_first_release_SUBSET.csv")
+pkg_first_rel <- read.csv(path.tmp, stringsAsFactors = FALSE)
+pkg_first_rel$first_release <- as.Date(pkg_first_rel$first_release)
+  
+## Sanity check
+range(pkg_first_rel$first_release)
+dim(pkg_first_rel)
+
+## Preview
+head(pkg_first_rel)
+```
+
+### Read `vector` with package name
+
+```{r}
+path.tmp <- file.path(project.dir, "data/pkg_name_SUBSET")
+pkg_name_vec <- dget(path.tmp)
+
+## Sanity check
+length(pkg_name_vec)
+
+## Preview
+head(pkg_name_vec)
+```
+
+### Get information from ALL pkgs in the subset
+```{r, eval=FALSE, message=FALSE, warning=FALSE}
+#Pkg in Github to get info about Metadata
+if (!("crandb" %in% rownames(installed.packages()))){
+  library(devtools)
+  install_github("metacran/crandb")
+}
+library(crandb)
+```
+
+```{r}
+#Get info for each pkg
+list.pkg<-vector(mode="list", length=dim(pkg_first_rel)[1])
+names(list.pkg) <- pkg_first_rel$pkg_name
+for (i in pkg_first_rel$pkg_name) {
+  pkg.data<-crandb::package(i)
+  list.pkg[[i]]<-pkg.data
+}
+#Title
+title<-as.vector(sapply(list.pkg, "[[", "Title"))
+#Description
+description<-as.vector(sapply(list.pkg, "[[", "Description"))
+#License
+license<-as.vector(sapply(list.pkg, "[[", "License"))
+#R Version
+depends.ls<-as.vector(sapply(list.pkg, "[[", "Depends"))
+r.version<-as.vector(sapply(depends.ls, "[[", "R"))
+r.version[sapply(r.version, is.null)] <- NA
+r.version<-unlist(r.version)
+#Number of Pkgs in Depends
+depends.pkg.n<-as.vector(lengths(depends.ls))
+#Number of Pkgs in Imports
+imports.pkg.n<-as.vector(lengths(as.vector(sapply(list.pkg, "[[", "Imports"))))
+#Number of Pkgs in Suggests
+suggests.pkg.n<-as.vector(lengths(as.vector(sapply(list.pkg, "[[", "Imports"))))
+#URL for Pkgs [about the pkg or the project. May be useful]
+url.pkg<-as.vector(sapply(list.pkg, "[[", "URL"))
+url.pkg[sapply(url.pkg, is.null)] <- NA
+url.pkg<-unlist(url.pkg)
+#Authors of Pkgs
+authors<-as.vector(sapply(list.pkg, "[[", "Author")) #Separate by commas
+#Use Roxygen (T/F)
+roxygen.use<-as.vector(sapply(list.pkg, "[[", "RoxygenNote"))
+roxygen.use[sapply(roxygen.use, is.null)] <- NA
+roxygen.use<-unlist(roxygen.use)
+roxygen.use<-!is.na(roxygen.use) 
+
+#Get Downloads by Day 
+#Pkg in Github to get info about downloads ["cranlogs"] (Option 1)
+#NOTE: gives you data since the "from" point even if the pkg was not released, cross validation with date of first released.
+if (!("cranlogs" %in% rownames(installed.packages()))){
+  library(devtools)
+  install_github("metacran/cranlogs")
+}
+library(cranlogs)
+#Example using Pkg: "EdSurvey"
+downloads.bydate<-cran_downloads(pkg_name_vec, 
+                               from = "2016-10-01", 
+                               to = "2017-10-30")
+head(downloads.bydate)
+#Sanity check
+length(unique(downloads.bydate$package))
+
+#Pkg in CRAN to get info about downloads ["dlstats"] (Option 2) 
+#[NOTE: it takes way more time than Option 1 and gives monthly data]
+if (!("dlstats" %in% rownames(installed.packages()))){
+  install.packages("dlstats")
+}
+library(dlstats)
+dlstats::cran_stats(pkg_name_vec)
+
+```

@@ -1,0 +1,474 @@
+---
+title: 'Features engineering: other features from code'
+author: "Marta Karas"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: 
+  html_document:
+    toc: false
+    toc_depth: 3
+---
+
+- vignette: pages (min / max / mean)
+- reference manual: number of functions exported
+- reference manual: unique number of papers cited
+
+
+```{r, include = FALSE}
+rm(list = ls())
+knitr::opts_chunk$set(include = TRUE, comment = NA, cache = FALSE, 
+                      message = FALSE, warning = FALSE)
+options(stringsAsFactors=FALSE)
+
+```
+
+* Define project folder `712-final_project` path. That is, modify `project.dir` string below; once it points to your `712-final_project` folder location, all other stuff below would work. 
+
+```{r}
+
+library(rvest)
+library(ggplot2)
+library(dplyr)
+library(future)
+library(stringi)
+library(tm)
+library(tools)
+
+user.name<-Sys.info()[7]
+if(user.name=="antiporta") project.dir <- "/Users/antiporta/Dropbox/712-final_project/"
+if(user.name=="mkaras") project.dir <- "/Users/mkaras/Dropbox/JHU/711-ADV_DATA_SCIENCE/712-final_project"
+```
+
+
+# Read `data.frame` with package name, package first release 
+
+```{r}
+path.tmp <- file.path(project.dir, "data/pkg_first_release_SUBSET.csv")
+pkg_first_rel <- read.csv(path.tmp, stringsAsFactors = FALSE)
+pkg_first_rel$first_release <- as.Date(pkg_first_rel$first_release)
+
+## Preview
+head(pkg_first_rel)
+packageNames.vec <- pkg_first_rel$pkg_name
+
+pkg_install_dir <- "/Users/mkaras/Documents/JHU/712-final_project_MY_WORKSPACE/data/pkg_installation_dir/"
+
+```
+
+
+
+# 1. has tests? 
+
+```{r, eval = FALSE}
+
+testthat.present.vec <- numeric()
+testthat.files.lines.cnt.vec <- numeric()
+
+n <- length(packageNames.vec)
+
+for (i in 1:n){
+  
+  pkg_name.i <- packageNames.vec[i]
+  pkg_dir.i <- paste0(pkg_install_dir, pkg_name.i)
+  all.contained.dirs <- list.dirs(pkg_dir.i, full.names = FALSE, recursive = FALSE)
+  all.contained.dirs <- all.contained.dirs[nchar(all.contained.dirs) > 0]
+  
+  ## Set counters for current package
+  testthat.present <- 0
+  testthat.files.lines.cnt <- 0
+  
+  ## Check if has tests dir
+  if ("tests" %in% all.contained.dirs){
+    tests.dir.i <- paste0(pkg_install_dir, pkg_name.i, "/tests")
+    tests.contained.dirs <-  list.dirs(tests.dir.i, full.names = FALSE, recursive = FALSE)
+    
+    ## Check if has tests/testthat dir 
+    if ( (length(tests.contained.dirs) > 0) & ("testthat" %in% tests.contained.dirs)){
+      testthat.present <- 1
+      testthat.dir.i <- paste0(pkg_install_dir, pkg_name.i, "/tests/testthat")
+      testthat.files <- list.files(testthat.dir.i, full.names = TRUE)
+      
+      ## Count number of non-empty lines within tests/testthat R files
+      for (testthat.file.tmp in testthat.files){
+        if (!(file_ext(testthat.file.tmp) == "R")) next
+        readtext.out <- readLines(testthat.file.tmp)
+        readtext.out.empty_lines <- grepl('^\\s*$', readtext.out)
+        readtext.out <- readtext.out[!readtext.out.empty_lines]
+        ## Increment counter by number of non-empty lines identified
+        testthat.files.lines.cnt <- testthat.files.lines.cnt + length(readtext.out)
+      }
+    }
+  }
+  
+  ## Save results for current package
+  testthat.present.vec <- c(testthat.present.vec, testthat.present)
+  testthat.files.lines.cnt.vec <- c(testthat.files.lines.cnt.vec, testthat.files.lines.cnt)
+
+}
+
+out_df <- data.frame(
+  pkg_name = packageNames.vec,
+  testthat_dir_present = testthat.present.vec,
+  testthat_R_files_lines_cnt = testthat.files.lines.cnt.vec)
+
+out_df %>% filter(testthat_dir_present == 1) %>% arrange(testthat_R_files_lines_cnt)
+out_df %>% filter(testthat_dir_present == 1) %>% arrange(desc(testthat_R_files_lines_cnt))
+
+table(out_df$testthat_dir_present)
+
+# out.path <- file.path(project.dir, "data/testthat_files.csv")
+# write.csv(out_df, out.path, row.names = FALSE, quote = FALSE)
+```
+
+
+# 2. has demo? 
+
+```{r, eval = FALSE}
+
+pkg_install_dir <- "/Users/mkaras/Documents/JHU/712-final_project_MY_WORKSPACE/data/pkg_installation_dir/"
+
+demo.present.vec <- numeric()
+demo.files.lines.cnt.vec <- numeric()
+
+n <- length(packageNames.vec)
+
+for (i in 1:n){
+  
+  pkg_name.i <- packageNames.vec[i]
+  pkg_dir.i <- paste0(pkg_install_dir, pkg_name.i)
+  all.contained.dirs <- list.dirs(pkg_dir.i, full.names = FALSE, recursive = FALSE)
+  all.contained.dirs <- all.contained.dirs[nchar(all.contained.dirs) > 0]
+  
+  ## Set counters for current package
+  demo.present <- 0
+  demo.files.lines.cnt <- 0
+  
+  ## Check if has tests dir
+  if ("demo" %in% all.contained.dirs){
+    demo.present <- 1
+    demo.dir.i <- paste0(pkg_install_dir, pkg_name.i, "/demo")
+    demo.contained.dirs <-  list.files(demo.dir.i, full.names = TRUE, recursive = TRUE)
+
+    ## Check if has tests/demo dir
+    for (demo.file.tmp in demo.contained.dirs){
+      if (!(file_ext(demo.file.tmp) == "R")) next
+      readtext.out <- readLines(demo.file.tmp)
+      readtext.out.empty_lines <- grepl('^\\s*$', readtext.out)
+      readtext.out <- readtext.out[!readtext.out.empty_lines]
+      ## Increment counter by number of non-empty lines identified
+      demo.files.lines.cnt <- demo.files.lines.cnt + length(readtext.out)
+    }
+  }
+
+  ## Save results for current package
+  demo.present.vec <- c(demo.present.vec, demo.present)
+  demo.files.lines.cnt.vec <- c(demo.files.lines.cnt.vec, demo.files.lines.cnt)
+
+}
+
+out_df <- data.frame(
+  pkg_name = packageNames.vec,
+  demo_dir_present = demo.present.vec,
+  demo_R_files_lines_cnt = demo.files.lines.cnt.vec)
+
+out_df %>% filter(demo_dir_present == 1) %>% arrange(demo_R_files_lines_cnt)
+out_df %>% filter(demo_dir_present == 1) %>% arrange(desc(demo_R_files_lines_cnt))
+
+
+table(out_df$demo_dir_present)
+
+# out.path <- file.path(project.dir, "data/demo_files.csv")
+# write.csv(out_df, out.path, row.names = FALSE, quote = FALSE)
+```
+
+
+
+# 3. data included in the package? 
+
+```{r, eval = FALSE}
+
+pkg_install_dir <- "/Users/mkaras/Documents/JHU/712-final_project_MY_WORKSPACE/data/pkg_installation_dir/"
+
+data_dir_present.vec <- numeric()
+
+data_size_total.vec <- numeric()
+data_size_rda.vec   <- numeric()
+data_size_RData.vec <- numeric()
+data_size_txt.vec   <- numeric()
+data_size_gz.vec    <- numeric()
+data_size_csv.vec   <- numeric()
+
+data_cnt_total.vec <- numeric()
+data_cnt_rda.vec   <- numeric()
+data_cnt_RData.vec <- numeric()
+data_cnt_txt.vec   <- numeric()
+data_cnt_gz.vec    <- numeric()
+data_cnt_csv.vec   <- numeric()
+
+n <- length(packageNames.vec)
+
+all.ext <- numeric()
+
+for (i in 1:n){
+  
+  pkg_name.i <- packageNames.vec[i]
+  pkg_dir.i <- paste0(pkg_install_dir, pkg_name.i)
+  all.contained.dirs <- list.dirs(pkg_dir.i, full.names = FALSE, recursive = FALSE)
+  all.contained.dirs <- all.contained.dirs[nchar(all.contained.dirs) > 0]
+  
+  ## Set counters for current package
+  data_dir_present.tmp <- 0
+  
+  data_size_total.tmp <- 0
+  data_size_rda.tmp   <- 0
+  data_size_RData.tmp <- 0
+  data_size_txt.tmp   <- 0
+  data_size_gz.tmp    <- 0
+  data_size_csv.tmp   <- 0
+  
+  data_cnt_total.tmp <- 0
+  data_cnt_rda.tmp   <- 0
+  data_cnt_RData.tmp <- 0
+  data_cnt_txt.tmp   <- 0
+  data_cnt_gz.tmp    <- 0
+  data_cnt_csv.tmp   <- 0
+    
+  ## Check if has tests dir
+  if ("data" %in% all.contained.dirs){
+    data_dir_present.tmp <- 1
+    data.dir.i <- paste0(pkg_install_dir, pkg_name.i, "/data")
+    data.contained.dirs <-  list.files(data.dir.i, full.names = TRUE, recursive = TRUE)
+    all.ext <- c(all.ext, sapply(data.contained.dirs, function(i) file_ext(i)))
+    
+    # Check size of data 
+    for (data.file.tmp in data.contained.dirs){
+      file.s <- file.size(data.file.tmp)
+      file.ext <- file_ext(data.file.tmp)
+      
+      data_size_total.tmp <- data_size_total.tmp + file.s
+      if (file.ext == "rda") data_size_rda.tmp <- data_size_rda.tmp + file.s
+      if (file.ext %in% c("RData", "rdata", "Rdata")) data_size_RData.tmp <- data_size_RData.tmp + file.s
+      if (file.ext == "txt") data_size_txt.tmp <- data_size_txt.tmp + file.s
+      if (file.ext == "gz") data_size_gz.tmp <- data_size_gz.tmp + file.s
+      if (file.ext == "csv") data_size_csv.tmp <- data_size_csv.tmp + file.s
+      
+      data_cnt_total.tmp <- data_cnt_total.tmp + 1
+      if (file.ext == "rda") data_cnt_rda.tmp <- data_cnt_rda.tmp + 1
+      if (file.ext %in% c("RData", "rdata", "Rdata")) data_cnt_RData.tmp <- data_cnt_RData.tmp + 1
+      if (file.ext == "txt") data_cnt_txt.tmp <- data_cnt_txt.tmp + 1
+      if (file.ext == "gz") data_cnt_gz.tmp <- data_cnt_gz.tmp + 1
+      if (file.ext == "csv") data_cnt_csv.tmp <- data_cnt_csv.tmp + 1
+    }
+  }
+
+  ## Save results for current package
+  data_dir_present.vec <- c(data_dir_present.vec, data_dir_present.tmp)
+  
+  data_size_total.vec  <- c(data_size_total.vec, data_size_total.tmp)
+  data_size_rda.vec    <- c(data_size_rda.vec, data_size_rda.tmp)
+  data_size_RData.vec  <- c(data_size_RData.vec, data_size_RData.tmp)
+  data_size_txt.vec    <- c(data_size_txt.vec, data_size_txt.tmp)
+  data_size_gz.vec     <- c(data_size_gz.vec, data_size_gz.tmp)
+  data_size_csv.vec    <- c(data_size_csv.vec, data_size_csv.tmp)
+  
+  data_cnt_total.vec  <- c(data_cnt_total.vec, data_cnt_total.tmp)
+  data_cnt_rda.vec    <- c(data_cnt_rda.vec, data_cnt_rda.tmp)
+  data_cnt_RData.vec  <- c(data_cnt_RData.vec, data_cnt_RData.tmp)
+  data_cnt_txt.vec    <- c(data_cnt_txt.vec, data_cnt_txt.tmp)
+  data_cnt_gz.vec     <- c(data_cnt_gz.vec, data_cnt_gz.tmp)
+  data_cnt_csv.vec    <- c(data_cnt_csv.vec, data_cnt_csv.tmp)
+}
+
+sort(table(all.ext))
+
+
+out_df <- data.frame(
+  pkg_name = packageNames.vec,
+  data_dir_present = data_dir_present.vec,
+  
+  data_size_total = data_size_total.vec,
+  data_size_rda = data_size_rda.vec,
+  data_size_rdata = data_size_RData.vec,
+  data_size_txt = data_size_txt.vec,
+  data_size_gz = data_size_gz.vec,
+  data_size_csv = data_size_csv.vec,
+  
+  data_cnt_total = data_cnt_total.vec,
+  data_cnt_rda = data_cnt_rda.vec,
+  data_cnt_rdata = data_cnt_RData.vec,
+  data_cnt_txt = data_cnt_txt.vec,
+  data_cnt_gz = data_cnt_gz.vec,
+  data_cnt_csv = data_cnt_csv.vec)
+
+## stats
+out_df %>% select(-pkg_name) %>% summarise_all(sum)
+table(out_df$data_dir_present)
+
+# out.path <- file.path(project.dir, "data/data_folder_files.csv")
+# write.csv(out_df, out.path, row.names = FALSE, quote = FALSE)
+```
+
+
+
+# 4. src folder included in the package? 
+
+```{r, eval = FALSE}
+
+pkg_install_dir <- "/Users/mkaras/Documents/JHU/712-final_project_MY_WORKSPACE/data/pkg_installation_dir/"
+
+src_dir_present.vec <- numeric()
+
+src_size_total.vec <- numeric()
+src_size_h.vec     <- numeric()
+src_size_cpp.vec   <- numeric()
+src_size_c.vec     <- numeric()
+
+src_cnt_total.vec  <- numeric()
+src_cnt_h.vec      <- numeric()
+src_cnt_cpp.vec    <- numeric()
+src_cnt_c.vec      <- numeric()
+
+
+n <- length(packageNames.vec)
+
+all.ext <- numeric()
+
+for (i in 1:n){
+  
+  pkg_name.i <- packageNames.vec[i]
+  pkg_dir.i <- paste0(pkg_install_dir, pkg_name.i)
+  all.contained.dirs <- list.dirs(pkg_dir.i, full.names = FALSE, recursive = FALSE)
+  all.contained.dirs <- all.contained.dirs[nchar(all.contained.dirs) > 0]
+  
+  ## Set counters for current package
+    src_dir_present.tmp <- 0
+    
+    src_size_total.tmp  <- 0
+    src_size_h.tmp      <- 0
+    src_size_cpp.tmp    <- 0
+    src_size_c.tmp      <- 0
+    
+    src_cnt_total.tmp  <- 0
+    src_cnt_h.tmp      <- 0
+    src_cnt_cpp.tmp    <- 0
+    src_cnt_c.tmp      <- 0
+
+  ## Check if has tests dir
+  if ("src" %in% all.contained.dirs){
+    src_dir_present.tmp <- 1
+    src.dir.i <- paste0(pkg_install_dir, pkg_name.i, "/src")
+    src.contained.files <-  list.files(src.dir.i, full.names = TRUE, recursive = TRUE)
+
+    all.ext <- c(all.ext, sapply(src.contained.files, function(i) file_ext(i)))
+    # Check size of data
+    for (src.file.tmp in src.contained.files){
+      file.s <- file.size(src.file.tmp)
+      file.ext <- file_ext(src.file.tmp)
+      
+      src_size_total.tmp <- src_size_total.tmp + file.s
+      if (file.ext == "h") src_size_h.tmp <- src_size_h.tmp + file.s
+      if (file.ext == "cpp") src_size_cpp.tmp <- src_size_cpp.tmp + file.s
+      if (file.ext == "c") src_size_c.tmp <- src_size_c.tmp + file.s
+      
+      src_cnt_total.tmp <- src_cnt_total.tmp + 1
+      if (file.ext == "h") src_cnt_h.tmp <- src_cnt_h.tmp + 1
+      if (file.ext == "cpp") src_cnt_cpp.tmp <- src_cnt_cpp.tmp + 1
+      if (file.ext == "c") src_cnt_c.tmp <- src_cnt_c.tmp + 1
+    }
+  }
+
+  ## Save results for current package
+  src_dir_present.vec <- c(src_dir_present.vec, src_dir_present.tmp)
+  
+  src_size_total.vec  <- c(src_size_total.vec, src_size_total.tmp)
+  src_size_h.vec      <- c(src_size_h.vec, src_size_h.tmp)
+  src_size_cpp.vec    <- c(src_size_cpp.vec, src_size_cpp.tmp)
+  src_size_c.vec      <- c(src_size_c.vec, src_size_c.tmp)
+  
+  src_cnt_total.vec  <- c(src_cnt_total.vec, src_cnt_total.tmp)
+  src_cnt_h.vec      <- c(src_cnt_h.vec, src_cnt_h.tmp)
+  src_cnt_cpp.vec    <- c(src_cnt_cpp.vec, src_cnt_cpp.tmp)
+  src_cnt_c.vec      <- c(src_cnt_c.vec, src_cnt_c.tmp)
+
+}
+
+sort(table(all.ext))
+
+out_df <- data.frame(
+  pkg_name = packageNames.vec,
+  src_dir_present = src_dir_present.vec,
+  
+  src_files_size_total = src_size_total.vec,
+  src_files_size_h = src_size_h.vec,
+  src_files_size_cpp = src_size_cpp.vec,
+  src_files_size_c = src_size_c.vec,
+  
+  src_files_cnt_total = src_cnt_total.vec,
+  src_files_cnt_h = src_cnt_h.vec,
+  src_files_cnt_cpp = src_cnt_cpp.vec,
+  src_files_cnt_c = src_cnt_c.vec)
+
+## stats
+out_df %>% select(-pkg_name) %>% summarise_all(sum)
+table(out_df$src_dir_present)
+
+
+# out.path <- file.path(project.dir, "data/src_folder_files.csv")
+# write.csv(out_df, out.path, row.names = FALSE, quote = FALSE)
+```
+
+
+
+
+# Produce final data frame 
+
+```{r}
+
+## Read and merge them alls
+out.path <- file.path(project.dir, "data/testthat_files.csv")
+testthat_files <- read.csv(out.path, stringsAsFactors = FALSE)
+
+out.path <- file.path(project.dir, "data/demo_files.csv")
+demo_files <- read.csv(out.path, stringsAsFactors = FALSE)
+
+out.path <- file.path(project.dir, "data/data_folder_files.csv")
+data_folder_files <- read.csv(out.path, stringsAsFactors = FALSE)
+
+out.path <- file.path(project.dir, "data/src_folder_files.csv")
+src_folder_files <- read.csv(out.path, stringsAsFactors = FALSE)
+
+df_final <- 
+  testthat_files %>%
+  left_join(demo_files, by = "pkg_name")  %>%
+  left_join(data_folder_files, by = "pkg_name") %>%
+  left_join(src_folder_files, by = "pkg_name")
+
+## Sanity check
+head(df_final)
+dim(testthat_files)
+dim(df_final)
+any(is.na(df_final))
+df_final %>% select(-pkg_name) %>% summarise_all(sum)
+
+
+## Interesting stats
+round(mean(df_final$testthat_dir_present),3)
+round(mean(df_final$demo_dir_present),3)
+round(mean(df_final$data_dir_present),3)
+round(mean(df_final$src_dir_present),3)
+
+
+out.path <- file.path(project.dir, "data/feature_task/features_extracted_part4_pkg_code.csv")
+write.csv(df_final, out.path, row.names = FALSE, quote = FALSE)
+
+```
+
+
+
+
+
+
+
+
+
+
+

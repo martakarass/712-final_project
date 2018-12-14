@@ -1,0 +1,169 @@
+---
+title: 'Get R packages list'
+author: "Marta Karas"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+---
+
+
+```{r, include = FALSE}
+rm(list = ls())
+knitr::opts_chunk$set(include = TRUE, comment = NA, cache = TRUE, 
+                      message = FALSE, warning = FALSE)
+
+```
+
+
+```{r}
+
+## Define project dir 
+## once it points to ur "712-final_project" folder, all other stuff below
+## would run for u 
+# project.dir <- "/Users/mkaras/Dropbox/JHU/711-ADV_DATA_SCIENCE/712-final_project"
+project.dir <- "/Users/mkaras/OneDrive - JHSPH/JHU/711-ADV_DATA_SCIENCE/712-final_project"
+
+library(rvest)
+library(ggplot2)
+library(dplyr)
+library(future)
+```
+
+
+### Get list of available R packages by date of publication
+
+Source: [link](https://www.r-bloggers.com/first-release-and-update-dates-of-r-packages-statistics/)
+
+```{r, eval = FALSE}
+url = "https://cran.r-project.org/web/packages/available_packages_by_date.html"
+
+CRANpage <- read_html(url)
+tbls     <- html_nodes(CRANpage, "table") # since HTML is in table; no need to scrape td/tr elements
+table1   <- html_table(tbls[1], fill = TRUE)
+pkg_all  <- data.frame(table1[1])
+
+# house formatting
+pkg_all$Date <- as.Date(pkg_all$Date)
+
+```
+
+
+### Get Initial dates of R Package Release
+
+```{r, eval = FALSE}
+
+packageNames.vec <- pkg_all$Package
+
+plan(multisession, workers = parallel::detectCores() - 1)
+
+t1 <- Sys.time()
+results.f <- lapply(1:length(packageNames.vec), function(i) {
+  
+  future({
+    
+    ## Archive URL
+    name1 <- packageNames.vec[i]
+    url1 <- 'https://cran.r-project.org/src/contrib/Archive/'
+    url2 <- paste0(url1, name1, '/')
+  
+    ## Check if we can access Archive webpage
+    read_html_out <- tryCatch(read_html(url2), error = function(e) e) 
+    
+    # If error was thrown on read_html attempt, package does not have archive
+    if (inherits(read_html_out, "error")) {
+      message("no archive")
+      firstRelease.i <- as.character(pkg_all$Date[i])
+      nofUpdates.i   <- 0 
+      archiveUrl.i   <- NA
+      
+    } else {
+    # If package does have an archive
+       tryCatch({
+          dat0 <- 
+            read_html_out %>%
+            html_nodes("table")  %>%
+            html_table(fill = TRUE) %>%
+            as.data.frame() 
+          dat <- as.Date(dat0$Last.modified, format = '%Y-%m-%d')
+          firstRelease.i <- as.character(min(dat, na.rm = TRUE))
+          nofUpdates.i   <- sum(!is.na(dat))
+          archiveUrl.i   <- url2 
+      }, error = function(e) {
+          firstRelease.i <- NA
+          nofUpdates.i   <- NA 
+          archiveUrl.i   <- NA
+      })
+    }
+    
+    ## Store results for this particulr package name
+    list(name1, firstRelease.i, nofUpdates.i, archiveUrl.i)
+  })
+  
+})
+
+results <- lapply(results.f, value)
+t2 <- Sys.time()
+t2 - t1
+
+## Process
+results.list <- lapply(results, function(ll) unlist(ll))
+results.df <- do.call(rbind.data.frame, results.list)
+names(results.df) <- c("name", "first_release", "no_of_updates", "archive_url")
+
+## Sanity checks
+head(results.df)
+tail(results.df)
+dim(results.df)
+all(results.df$name == packageNames.vec)
+is.na(results.df$no_of_updates)
+
+## Save all data to file
+results.df2 <- 
+  cbind(pkg_all %>% select(pkg_name = Package, last_update = Date), 
+        results.df %>% select(-name, -archive_url)) 
+
+out.path <- file.path(project.dir, "data/pkg_first_release.csv")
+write.csv(results.df2, out.path, row.names = FALSE, quote = FALSE)
+```
+
+
+### Prepare final list of packages 
+
+```{r}
+## Assumed data ranges
+date.ranges <- as.Date(c("2016-10-01", "2017-09-30"))
+
+## Read from file: Marta
+pkg_first_rel.path <- file.path(project.dir, "data/pkg_first_release.csv")
+pkg_first_rel <- 
+  read.csv(pkg_first_rel.path, stringsAsFactors = FALSE) %>%
+  mutate(last_update = as.Date(last_update),
+         first_release = as.Date(first_release))
+
+pkg_first_rel.sub <- 
+  pkg_first_rel %>%
+  filter(first_release >= date.ranges[1],
+         first_release <= date.ranges[2])
+```
+
+
+```{r}
+## Save data frame with pkg_name, first_release
+out.path <- file.path(project.dir, "data/pkg_first_release_SUBSET.csv")
+write.csv(pkg_first_rel.sub %>% select(pkg_name, first_release), 
+          out.path, row.names = FALSE, quote = FALSE)
+
+pkg_name_vec <- pkg_first_rel.sub$pkg_name
+dput(pkg_name_vec, file.path(project.dir, "data/pkg_name_SUBSET"))
+```
+
+
+
+
+
+
+
+
+

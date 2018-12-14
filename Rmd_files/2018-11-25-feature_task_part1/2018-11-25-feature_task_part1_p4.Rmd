@@ -1,0 +1,342 @@
+---
+title: 'Features engineering: task 1'
+author: "Perry"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: 
+  html_document:
+    toc: false
+    toc_depth: 3
+---
+
+- text features from package title         
+- text features from package description      
+
+
+```{r, include = FALSE}
+rm(list = ls())
+knitr::opts_chunk$set(include = TRUE, comment = NA, cache = TRUE, 
+                      message = FALSE, warning = FALSE)
+options(stringsAsFactors=FALSE)
+
+```
+
+* Define project folder `712-final_project` path. That is, modify `project.dir` string below; once it points to your `712-final_project` folder location, all other stuff below would work. 
+
+```{r}
+library(rvest)
+library(ggplot2)
+library(dplyr)
+library(future)
+library(stringi)
+library(tm)
+library(tools)
+# library(qdap)
+library(wordcloud)
+
+user.name<-Sys.info()[7]
+if(user.name=="antiporta") project.dir <- "/Users/antiporta/Dropbox/712-final_project/"
+if(user.name=="mkaras") project.dir <- "/Users/mkaras/Dropbox/JHU/711-ADV_DATA_SCIENCE/712-final_project"
+if(user.name=="kuop2") project.dir <- "C:/Users/kuop2/Desktop/712-final_project"
+if(user.name=="pkuo6") project.dir <- "C:/Users/pkuo6/Desktop/712-final_project"
+```
+
+
+# Read `data.frame` with package name, package first release 
+
+```{r}
+path.tmp <- file.path(project.dir, "data/pkg_first_release_SUBSET.csv")
+pkg_first_rel <- read.csv(path.tmp, stringsAsFactors = FALSE)
+pkg_first_rel$first_release <- as.Date(pkg_first_rel$first_release)
+
+## Preview
+head(pkg_first_rel)
+```
+
+
+
+# 1. Text features from package title/package description     
+### Remarks
+
+
+```{r eval = FALSE}
+packageNames.vec <- pkg_first_rel$pkg_name
+pkg_first_rel$title <- NA
+pkg_first_rel$description <- NA
+
+t1 <- Sys.time()
+
+for(i in 1:length(packageNames.vec)){
+
+
+  package <- read_html(paste0("https://cran.r-project.org/web/packages/",
+                              packageNames.vec[i],
+                              "/"))
+  packagetitle1 <- tryCatch({package %>% 
+    html_nodes("body h2") %>%
+    html_text() %>%
+    as.character()}, error = function(e) { e })
+    
+  if (inherits(packagetitle1, "error")){
+      pkg_first_rel$title[i] <- 
+        "Unsuccessful package vignettes URL extract via html_nodes()"
+    }else{
+      pkg_first_rel$title[i] <- packagetitle1[1] 
+    }
+
+  packagetitle2 <- tryCatch({package %>% 
+    html_nodes("body p") %>%
+    html_text() %>%
+    as.character()}, error = function(e) { e })
+  if (inherits(packagetitle1, "error")){
+      pkg_first_rel$description[i] <- 
+        "Unsuccessful package vignettes URL extract via html_nodes()"
+    }else{
+      pkg_first_rel$description[i] <- packagetitle2[1] 
+    }
+  print(i)
+}
+
+t2 <- Sys.time()
+t3 <- Sys.time()
+t2 - t1
+t3 - t1
+
+out.path <- file.path(project.dir, "data/pkg_text2.csv")
+write.csv(pkg_first_rel, out.path, row.names = FALSE, quote = FALSE)
+out.path <- file.path(project.dir, "data/pkg_text2.rds")
+saveRDS(pkg_first_rel, out.path, ascii = FALSE, version = NULL,
+        compress = TRUE, refhook = NULL)
+
+```
+## Raw file for description     
+```{r fig.height=10, fig.width=10}
+path.tmp <- file.path(project.dir, "data/pkg_text2.rds")
+titledescrip <- readRDS(path.tmp)
+
+# Select the dataframe 
+description_text <- titledescrip %>%
+  select(pkg_name, description) %>%
+  rename(doc_id = pkg_name,
+         text = description) %>%
+  data.frame(.)
+
+# Build  corpus
+df_source <- DataframeSource(description_text)
+df_corpus <- VCorpus(df_source)
+meta(df_corpus)
+
+# Write a function on corpus
+clean_corpus <- function(corpus) {
+  # Remove punctuation
+  corpus <- tm_map(corpus, removePunctuation)
+  # Transform to lower case
+  corpus <- tm_map(corpus, content_transformer(tolower))
+  # Add more stopwords
+  corpus <- tm_map(corpus, removeWords, c(stopwords("en"), "R"))
+  # Select stem
+  corpus <- tm_map(corpus, stemDocument)
+  # Remove numbers
+  corpus <- tm_map(corpus, removeNumbers)
+  # Remove punctuation
+  corpus <- tm_map(corpus, removePunctuation)
+  # Add more stopwords --> Do this again!
+  corpus <- tm_map(corpus, removeWords, c(stopwords("en"), "R","can","also"))
+  # Strip whitespace
+  corpus <- tm_map(corpus, stripWhitespace)
+  return(corpus)
+}
+
+clean_df_corp <- clean_corpus(df_corpus)
+description_dtm <- DocumentTermMatrix(clean_df_corp)
+print(description_dtm) 
+# Print out description_dtm data
+# Really sparse!
+
+description_m <- as.matrix(description_dtm)
+dim(description_m)
+description_m4csv <- cbind(pkg_name = titledescrip$pkg_name,description_m)
+
+out.path <- file.path(project.dir, "data/pkg_description_raw_stem.csv")
+write.csv(data.frame(description_m4csv), out.path)
+out.path <- file.path(project.dir, "data/pkg_description_raw_stem.rds")
+saveRDS(description_m, out.path, ascii = FALSE, version = NULL,
+        compress = TRUE, refhook = NULL)
+
+################# Plot
+description_tdm <- TermDocumentMatrix(clean_df_corp)
+description_m2 <- as.matrix(description_tdm)
+term_frequency <- rowSums(description_m2)
+term_frequency <- sort(term_frequency,
+                       decreasing = TRUE)
+barplot(term_frequency[1:20],
+        col = "blue", las = 2)
+
+forcloud <- data.frame(term = names(term_frequency),
+                       num = term_frequency)
+# make wordcloud
+wordcloud(forcloud$term, forcloud$num,
+          max.words = 100, colors = "red")
+
+# Select final data
+process = as.data.frame(description_m4csv)
+forcloud_select = forcloud[forcloud$num > as.integer(nrow(titledescrip)*0.05),]
+process_select = process[names(process) %in% c("pkg_name",as.character(forcloud_select$term))]
+
+for(i in 1:length(names(process_select))){
+  if(names(process_select)[i] == "pkg_name"){
+    names(process_select)[i] = "pkg_name"
+  } else{
+    names(process_select)[i] = paste0("description_",names(process_select)[i])
+  }
+}
+
+out.path <- file.path(project.dir, "data/pkg_description_extract.csv")
+write.csv(data.frame(process_select), out.path,row.names = FALSE)
+out.path <- file.path(project.dir, "data/pkg_description_extract.rds")
+saveRDS(process_select, out.path, ascii = FALSE, version = NULL,
+        compress = TRUE, refhook = NULL)
+```
+
+
+```{r words_histogram_description, fig.width=6, fig.height=6, cache = TRUE}
+
+plt.df <- data.frame(term = names(term_frequency),
+                       num = term_frequency)
+plt.df <- 
+  plt.df %>%
+  arrange(desc(num)) %>%
+  filter(row_number() <= 20 ) %>%
+  arrange(num)
+plt.df$term <- factor(as.character(plt.df$term),
+                      levels = plt.df$term )
+
+ggplot(plt.df, aes(x = term, y = num)) + 
+  geom_bar(stat = "identity", fill = "blue", alpha = 0.5, color = "black") + 
+  coord_flip() + 
+  theme_minimal(base_size = 14) + 
+  labs(x = "term", 
+       y = "term count",
+       title = "Term count across all packages description")
+  
+
+```
+
+
+## Raw file for title     
+```{r fig.height=10, fig.width=10}
+path.tmp <- file.path(project.dir, "data/pkg_text2.rds")
+titledescrip <- readRDS(path.tmp)
+
+# Select the dataframe 
+title_text <- titledescrip %>%
+  select(pkg_name, title) %>%
+  rename(doc_id = pkg_name,
+         text = title) %>%
+  data.frame(.)
+
+# Build  corpus
+df_source <- DataframeSource(title_text)
+df_corpus <- VCorpus(df_source)
+meta(df_corpus)
+
+clean_corpus <- function(corpus) {
+  # Remove punctuation
+  corpus <- tm_map(corpus, removePunctuation)
+  # Transform to lower case
+  corpus <- tm_map(corpus, content_transformer(tolower))
+  # Add more stopwords
+  corpus <- tm_map(corpus, removeWords, c(stopwords("en"), "R"))
+  # Select stem
+  corpus <- tm_map(corpus, stemDocument)
+  # Remove numbers
+  corpus <- tm_map(corpus, removeNumbers)
+  # Remove punctuation
+  corpus <- tm_map(corpus, removePunctuation)
+  # Add more stopwords --> Do this again!
+  corpus <- tm_map(corpus, removeWords, c(stopwords("en"), "R","can","also"))
+  # Strip whitespace
+  corpus <- tm_map(corpus, stripWhitespace)
+  return(corpus)
+}
+
+clean_df_corp <- clean_corpus(df_corpus)
+title_dtm <- DocumentTermMatrix(clean_df_corp)
+print(title_dtm) 
+# Print out title_dtm data
+# Really sparse!
+
+title_m <- as.matrix(title_dtm)
+dim(title_m)
+title_m4csv <- cbind(pkg_name = titledescrip$pkg_name,title_m)
+
+# Review a portion of the matrix 
+# title_m[1208:1210, 758:779]
+
+out.path <- file.path(project.dir, "data/pkg_title_raw.csv")
+write.csv(data.frame(title_m4csv), out.path)
+out.path <- file.path(project.dir, "data/pkg_title_raw.rds")
+saveRDS(title_m, out.path, ascii = FALSE, version = NULL,
+        compress = TRUE, refhook = NULL)
+
+################# Plot
+title_tdm <- TermDocumentMatrix(clean_df_corp)
+title_m2 <- as.matrix(title_tdm)
+term_frequency <- rowSums(title_m2)
+term_frequency <- sort(term_frequency,
+                       decreasing = TRUE)
+barplot(term_frequency[1:20],
+        col = "blue", las = 2)
+
+forcloud <- data.frame(term = names(term_frequency),
+                       num = term_frequency)
+# make wordcloud
+wordcloud(forcloud$term, forcloud$num,
+          max.words = 100, colors = "red")
+
+# Select final data
+process = as.data.frame(title_m4csv)
+# 0.01 = 1%
+forcloud_select = forcloud[forcloud$num > as.integer(nrow(titledescrip)*0.01),]
+process_select = process[names(process) %in% c("pkg_name",as.character(forcloud_select$term))]
+
+for(i in 1:length(names(process_select))){
+  if(names(process_select)[i] == "pkg_name"){
+    names(process_select)[i] = "pkg_name"
+  } else{
+    names(process_select)[i] = paste0("title_",names(process_select)[i])
+  }
+}
+
+out.path <- file.path(project.dir, "data/pkg_title_extract.csv")
+write.csv(data.frame(process_select), out.path,row.names = FALSE)
+out.path <- file.path(project.dir, "data/pkg_title_extract.rds")
+saveRDS(process_select, out.path, ascii = FALSE, version = NULL,
+        compress = TRUE, refhook = NULL)
+
+```
+
+
+
+
+```{r words_histogram_title, fig.width=6, fig.height=6, cache = TRUE}
+
+plt.df <- data.frame(term = names(term_frequency),
+                       num = term_frequency)
+plt.df <- 
+  plt.df %>%
+  arrange(desc(num)) %>%
+  filter(row_number() <= 20 ) %>%
+  arrange(num)
+plt.df$term <- factor(as.character(plt.df$term),
+                      levels = plt.df$term )
+
+ggplot(plt.df, aes(x = term, y = num)) + 
+  geom_bar(stat = "identity", fill = "yellow", alpha = 0.5, color = "black") + 
+  coord_flip() + 
+  theme_minimal(base_size = 14) + 
+  labs(x = "term", 
+       y = "term count",
+       title = "Term count across all packages title")
+  
+
+```

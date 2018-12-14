@@ -1,0 +1,400 @@
+---
+  title: 'Get Features Meta Data'
+  author: "Daniel Antiporta"
+  date: "`r format(Sys.time(), '%d %B %Y')`"
+  output: 
+    html_document:
+      toc: false
+      toc_depth: 3
+---
+
+```{r, include = FALSE}
+rm(list = ls())
+knitr::opts_chunk$set(include = TRUE, comment = NA, cache = TRUE, 
+                      message = FALSE, warning = FALSE)
+
+```
+
+* Define project folder `712-final_project` path. That is, modify `project.dir` string below; once it points to your `712-final_project` folder location, all other stuff below would work. 
+
+```{r}
+user.name<-Sys.info()[7]
+if(user.name=="antiporta") project.dir <- "/Users/antiporta/Dropbox/712-final_project/"
+if(user.name=="dantipor") project.dir <- "C://Users//dantipor//Dropbox//712-final_project/"
+if(user.name=="mkaras") project.dir <- "/Users/mkaras/Dropbox/JHU/711-ADV_DATA_SCIENCE/712-final_project/"
+library(rvest)
+library(ggplot2)
+library(dplyr)
+library(future)
+library(readr)
+library(stringr)
+```
+
+## Read `vector` with package name
+
+```{r}
+path.tmp <- file.path(project.dir, "data/pkg_name_SUBSET")
+out.path <- file.path(project.dir, "data/pkg_first_release_urls_DA.csv")
+release_urls_DA <- read.csv(out.path, stringsAsFactors = FALSE)
+pkg_name_vec <- release_urls_DA$name
+```
+
+## Get DESCRIPTION FILES from FIRST R Package Release Folders
+
+```{r, eval = FALSE}
+#Parallel Analysis
+plan(multisession, workers = parallel::detectCores() - 1)
+n <- length(pkg_name_vec)
+results.desc <- lapply(1:n, function(i) {
+  future({
+    
+    ## Name Pkg
+    name_i <- pkg_name_vec[i]
+    
+    ## Get Description FILE
+    desc.i<-read_lines(paste0("/Users/antiporta/Downloads/pkg_untar/", 
+                              pkg_name_vec[i], 
+                              "/DESCRIPTION"))
+    
+    ## Store results for this particular package name
+    list(name_i, desc.i)
+  })
+})
+
+## Wrap up the results
+results <- lapply(results.desc, value)
+desc.files.pkg <-  sapply(results,`[`,2)
+saveRDS(desc.files.pkg, 
+  file = paste0(project.dir, "Rmd_files/2018-11-25-feature_task_part2/desc_files_RDS")
+```
+
+## Working in KEY features
+```{r}
+desc.files.pkg<-readRDS(paste0(project.dir, "Rmd_files/2018-11-25-feature_task_part2/desc_files_RDS"))
+```
+
+###TITLE
+
+```{r}
+list.pkg_title<-vector(mode="list", length=length(pkg_name_vec))
+names(list.pkg_title) <- pkg_name_vec
+for (i in 1:length(pkg_name_vec)) {
+  pkg.title.i<-grep("^Title", desc.files.pkg[[i]])
+  pkg.title.i<-desc.files.pkg[[i]][pkg.title.i]
+  pkg.title.i<-gsub(".*:", "", pkg.title.i) 
+  pkg.title.i<-trimws(pkg.title.i)
+  list.pkg_title[[i]]<-pkg.title.i
+}
+pkg_title.df <- do.call(rbind, list.pkg_title)
+pkg_title.df <- cbind.data.frame(pkg_name_vec, pkg_title.df)
+
+## Save data frame with pkg_name, first_release
+out.path <- file.path(project.dir, "data/pkg_first_release_title.csv")
+write.csv(pkg_title.df , 
+          out.path, row.names = TRUE, quote = TRUE)
+```
+
+###PACKAGE VERSION
+
+```{r}
+list.pkg.version<-vector(mode="list", length=length(pkg_name_vec))
+names(list.pkg.version) <- pkg_name_vec
+for (i in 1:length(pkg_name_vec)) {
+  pkg.version.i<-grep("^Version", desc.files.pkg[[i]])
+  pkg.version.i<-desc.files.pkg[[i]][pkg.version.i]
+  pkg.version.i<-gsub(".*:", "", pkg.version.i) 
+  pkg.version.i<-trimws(pkg.version.i)
+  list.pkg.version[[i]]<-pkg.version.i
+}
+pkg.version.df <- do.call(rbind, list.pkg.version)
+length(unique(pkg.version.df))
+table(pkg.version.df)
+
+#Package Versions (Binary)
+pkg_ver<-pkg.version.df
+pkg_ver<-sapply(str_split(pkg_ver, "\\."), "[", 1)
+pkg_ver<-replace(pkg_ver, pkg_ver=="1-00", 1)
+pkg_ver<-replace(pkg_ver, pkg_ver=="2017", 0)
+pkg_ver<-replace(pkg_ver, pkg_ver!="0", 1)
+pkg_ver<-as.numeric(pkg_ver)
+```
+
+###LICENSE
+
+```{r}
+list.pkg.license<-vector(mode="list", length=length(pkg_name_vec))
+names(list.pkg.license) <- pkg_name_vec
+for (i in 1:length(pkg_name_vec)) {
+  pkg.license.i<-grep("^License\\:", desc.files.pkg[[i]])
+  pkg.license.i<-desc.files.pkg[[i]][pkg.license.i]
+  pkg.license.i<-gsub(".*:", "", pkg.license.i) 
+  pkg.license.i<-trimws(pkg.license.i)
+  list.pkg.license[[i]]<-pkg.license.i
+}
+pkg.license.df <- do.call(rbind, list.pkg.license)
+summary(pkg.license.df, maxsum=20)
+anyNA(pkg.license.df)
+#License (grouping)
+license_group<-pkg.license.df
+  license_group[which(grepl("^GPL", license_group))]<-
+  "GPL"
+  license_group[which(grepl("^GNU", license_group))]<-"GPL"
+  license_group[which(grepl("^Apache", license_group))]<-"Apache"
+  license_group[which(grepl("^AGPL", license_group))]<-"AGPL"
+  license_group[which(grepl("^Mozilla", license_group))]<-"MPL"
+  license_group[which(grepl("^MPL", license_group))]<-"MPL"
+  license_group[which(grepl("^LGPL", license_group))]<-"LGPL"
+  license_group[which(grepl("^BSD", license_group))]<-"BSD"
+  license_group[which(grepl("^MIT", license_group))]<-"MIT"
+  license_group[which(grepl("^FreeBSD", license_group))]<-"FreeBSD"
+  license_group[which(grepl("^CC BY", license_group))]<-"CC BY"
+  license_group[which(grepl("^Boost", license_group))]<-"BSL"
+  license_group[which(grepl("^BSL", license_group))]<-"BSL"
+table(license_group)
+license_group <- license_group%>% as.data.frame() %>% 
+  group_by(V1) %>% mutate(count=n())
+saveRDS(license_group, 
+  file = paste0(project.dir,
+                "/Rmd_files/2018-11-25-feature_task_part2/license_group"))
+
+#rownames_to_column(license_group, var = "pkg")
+```
+
+###ROXYGEN USE
+
+```{r}
+list.pkg.roxygen<-vector(mode="list", length=length(pkg_name_vec))
+names(list.pkg.roxygen) <- pkg_name_vec
+for (i in 1:length(pkg_name_vec)) {
+  pkg.roxygen.i<-grep("^Roxygen", desc.files.pkg[[i]])
+  if (length(pkg.roxygen.i)!=0){
+    pkg.roxygen.i<-desc.files.pkg[[i]][pkg.roxygen.i]
+    pkg.roxygen.i<-gsub(".*:", "", pkg.roxygen.i) 
+    pkg.roxygen.i<-trimws(pkg.roxygen.i)
+  } else{
+    pkg.roxygen.i<-NA
+  }
+  list.pkg.roxygen[[i]]<-pkg.roxygen.i
+}
+pkg.roxygen.df <- do.call(rbind, list.pkg.roxygen)
+table(pkg.roxygen.df)
+#Roxygen (Y/N)
+roxygen_yn<- replace(pkg.roxygen.df, pkg.roxygen.df!="", 1)
+roxygen_yn<- replace(roxygen_yn, is.na(roxygen_yn), 0)
+```
+
+###DEPENDS/IMPORTS/SUGGESTS/LINKING TO
+
+```{r, eval=FALSE}
+library(desc)
+plan(multisession, workers = parallel::detectCores() - 1)
+n <- length(pkg_name_vec)
+results.deps <- lapply(1:n, function(i) {
+  future({
+    ## Name Pkg
+    name_i <- pkg_name_vec[i]
+    ## Get Imports/Depends/etc
+    out.path.pkg <- file.path("/Users/antiporta/Downloads/pkg_untar/",
+      name_i, "DESCRIPTION")
+    deps.i<-desc::desc_get_deps(out.path.pkg)
+    ## Store results for this particular package name
+    list(name_i, deps.i)
+  })
+})
+## Wrap up the results
+results.deps.d <- lapply(results.deps, value)
+deps.files.pkg <-  sapply(results.deps.d,`[`,2)
+saveRDS(deps.files.pkg, 
+  file = "/Users/antiporta/Dropbox/712-final_project/Rmd_files/2018-11-25-feature_task_part2/deps_pkg_RDS")
+```
+
+```{r}
+## Number of Depends/Suggests/etc
+deps.files.pkg<-readRDS(paste0(project.dir,"Rmd_files/2018-11-25-feature_task_part2/deps_pkg_RDS"))
+list.pkg.deps<-vector(mode="list", length=length(pkg_name_vec))
+names(list.pkg.deps) <- pkg_name_vec
+for (i in 1:length(pkg_name_vec)){
+  data.i<-as.data.frame(deps.files.pkg[i])
+  rpos<- grep("\\bR$", data.i$package)
+  if (length(rpos)==0){
+    rpos<-which(grepl("^R\\.", data.i$package))
+    vpos<-which(grepl("*", data.i$version))
+    rpos<-which(rpos==vpos)
+  } 
+  if (length(rpos)!=0){
+    data.i<- data.i %>% filter(row_number()!=rpos) %>%
+     summarize(n=n()) %>% as.numeric()
+  } else{
+    data.i<- data.i  %>% summarize(n=n()) %>% as.numeric()
+  }
+  list.pkg.deps[[i]]<-data.i 
+} 
+pkg.depends.df <- do.call(rbind,list.pkg.deps)
+table(pkg.depends.df)
+anyNA(pkg.depends.df)
+```
+
+###MINIMUN R VERSION COMPATIBLE
+
+```{r}
+list.pkg.rversion<-vector(mode="list", length=length(pkg_name_vec))
+names(list.pkg.rversion) <- pkg_name_vec
+for (i in 1:length(pkg_name_vec)){
+  rversion.i<-as.data.frame(deps.files.pkg[i])
+  rpos<- grep("\\bR$", rversion.i$package)
+  if (length(rpos)==0){
+    rpos<-which(grepl("^R\\.", rversion.i$package))
+    vpos<-which(grepl("*", rversion.i$version))
+    rpos<-which(rpos==vpos)
+  } 
+  if (length(rpos)!=0){
+    rversion.i<- rversion.i %>% filter(row_number()==rpos) %>%
+     select(version) %>% as.character()
+  } else{
+    rversion.i<- NA
+  }
+  list.pkg.rversion[[i]]<-rversion.i 
+} 
+pkg.rversion.df <- do.call(rbind,list.pkg.rversion)
+table(pkg.rversion.df)
+#R Master releases
+#install.packages("rversions")
+library(rversions)
+master.rversions<-r_versions()
+master.rversions<-master.rversions[which(grepl("2.0.0",master.rversions$version)):110,]
+master.rversions$date<-as.Date(master.rversions$date)
+unique(master.rversions$version)
+#Clean R-version Variable
+library(stringr)
+length(pkg.rversion.df)
+rver.p1<-substr(pkg.rversion.df, start = 1, stop = 2)
+rver.p1<-trimws(rver.p1)
+rver.p2<-substr(pkg.rversion.df, start = 3, stop = 100)
+rver.p2[which(grepl("^\\\n",rver.p2))]<-
+  "3.0.0"
+rver.p2<-trimws(rver.p2)
+#rver.p2[which(rver.p2=="3.00")]<-
+#  "3.0.0"
+length(unique(rver.p2))
+rver.p2<-replace(rver.p2, rver.p2=="", NA)
+length(unique(rver.p2))
+rver.p3<-str_split_fixed(rver.p2, "\\.", n=3 )
+rver1<-sapply(rver.p3[,1],`[`,1)
+rver2<-sapply(rver.p3[,2],`[`,1)
+rver3<-sapply(rver.p3[,3],`[`,1)
+rver3[rver1!=""]<-"0"
+clean.rver<-paste(as.numeric(rver1), as.numeric(rver2), as.numeric(rver3), sep=".")
+clean.rver[clean.rver=="NA.NA.NA"]<-NA
+unique(clean.rver)
+which(!(clean.rver[!is.na(clean.rver)] %in% unique(master.rversions$version)))
+clean.rver[!is.na(clean.rver)][604] #This R version DOES NOT exist! change to next one available
+#Match with master and put minimum R required version
+length(clean.rver[!is.na(clean.rver) & clean.rver!="2.16.0"])
+clean.rver[clean.rver=="2.16.0"]<-"3.0.0" #This R version DOES NOT exist! change to next one available
+##Change values when the sign is >
+norder<-match(clean.rver[which(rver.p1==">")], master.rversions$version)
+clean.rver[which(rver.p1==">")]<-master.rversions$version[norder+1]
+unique(clean.rver)
+##Dealing with the NA, link with pkg release date.
+first_release_dates<-read_csv(paste0(project.dir,
+                                     "data/pkg_first_release_SUBSET.csv"))
+first_release_dates<-first_release_dates %>%
+  select(pkg_name, first_release)
+##Get closest date AFTER launch
+closest_after_date<-vector(mode="list", length=length(pkg_name_vec))
+for (i in 1:length(closest_after_date)){
+  closest_after_date[i]<-
+    master.rversions$date[master.rversions$date>first_release_dates$first_release[i]][1]
+}
+closest_after_date <- do.call(rbind,closest_after_date)
+closest_after_date <- as.Date(closest_after_date, origin = "1970-01-01")
+clean.rver1<-
+  master.rversions$version[match(closest_after_date, master.rversions$date)]
+clean.rver_modified<-ifelse(is.na(clean.rver), clean.rver1, clean.rver)
+##Calculating numeric value for R version
+clean.rver_part<-str_split_fixed(clean.rver, "\\.", n=3 )
+rver1<-sapply(clean.rver_part[,1],`[`,1)
+rver2<-sapply(clean.rver_part[,2],`[`,1)
+rver3<-sapply(clean.rver_part[,3],`[`,1)
+unique(clean.rver)
+unique(rver1)
+unique(rver2)
+unique(rver3)
+rversion_final<-as.numeric(rver1)*100
+rversion_final<-rversion_final+as.numeric(rver2)
+rversion_final<-rversion_final+(as.numeric(rver3)*.1)
+rversion_final<-as.numeric(rversion_final)
+unique(rversion_final)
+##Calculating numeric value for R version MODIFIED (NAs)
+clean.rver_part_m<-str_split_fixed(clean.rver_modified, "\\.", n=3 )
+rver1_m<-sapply(clean.rver_part_m[,1],`[`,1)
+rver2_m<-sapply(clean.rver_part_m[,2],`[`,1)
+rver3_m<-sapply(clean.rver_part_m[,3],`[`,1)
+unique(clean.rver_modified)
+unique(rver1_m)
+unique(rver2_m)
+unique(rver3_m)
+rversion_final_m<-as.numeric(rver1_m)*100
+rversion_final_m<-rversion_final_m+as.numeric(rver2_m)
+rversion_final_m<-rversion_final_m+(as.numeric(rver3_m)*.1)
+rversion_final_m<-as.numeric(rversion_final_m)
+unique(rversion_final_m)
+```
+
+###AUTHORS
+
+```{r}
+authors.df<-tools::CRAN_package_db()
+authors.df <- authors.df[, c(1,17)]
+#authors.df<-authors.df[authors.df$Package %in% pkg_name_vec,]
+authors.df<-left_join(first_release_dates,authors.df, by=c("pkg_name"="Package")) %>% select(-first_release)
+authors.vec<-gsub("\\(.*?\\)", "", authors.df$Author)
+authors.vec<-gsub("\\[.*?\\]", "", authors.vec) 
+authors.vec<-str_replace(authors.df$Author, "\\[.*\\]", "")
+n_authors<-str_count(authors.vec, ",")
+n_authors<-n_authors+1
+#which(n_authors==35)
+#which(is.na(n_authors))
+n_authors[889]<-1
+n_authors[1572]<-2
+table(n_authors)
+authors.df_final<-cbind.data.frame(pkg_name_vec, n_authors)
+authors.df_final$pkg_name_vec<-as.character(authors.df_final$pkg_name_vec)
+saveRDS(authors.df_final, 
+  file = paste0(project.dir,
+                "/Rmd_files/2018-11-25-feature_task_part2/authors.df_final"))
+```
+
+
+###CREATE DATA FILE
+
+```{r, eval=FALSE}
+length(n_authors)
+features.pkg<-cbind.data.frame(pkg_name_vec,
+                    pkg_ver,
+                    license_group,
+                    roxygen_yn,
+                    pkg.depends.df,
+                    rversion_final,
+                    rversion_final_m,
+                    n_authors)
+names(features.pkg)<-
+  c("pkg_name", "pkg_version", 
+    "license_group", "roxygen_yn", 
+    "n_depends","rversion_min",
+    "rversion_min_modified", "nauthors")
+features.pkg$pkg_name<-as.character(features.pkg$pkg_name)
+  
+## Save data frame with pkg_name, first_release
+saveRDS(features.pkg, 
+  file = paste0(project.dir,
+    "Rmd_files/2018-11-25-feature_task_part2/df_deps_pkgs_final"))
+out.path <- file.path(project.dir, "data/feature_task/features_extracted_part2.csv")
+write.csv(features.pkg, 
+          out.path, 
+          row.names = FALSE,
+          quote = TRUE)
+```
+
+
+
