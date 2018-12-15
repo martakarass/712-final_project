@@ -6,11 +6,11 @@ author:
 - "Perry Kuo"
 date: "`r format(Sys.time(), '%d %B %Y')`"
 output:
-  md_document:
-    variant: markdown_github
+  html_document:
     toc: false
     toc_depth: 3
-  html_document:
+  md_document:
+    variant: markdown_github
     toc: false
     toc_depth: 3
 ---
