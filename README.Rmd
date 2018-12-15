@@ -6,11 +6,11 @@ author:
 - "Perry Kuo"
 date: "`r format(Sys.time(), '%d %B %Y')`"
 output:
-  html_document:
-    toc: false
-    toc_depth: 3
   md_document:
     variant: markdown_github
+    toc: false
+    toc_depth: 3
+  html_document:
     toc: false
     toc_depth: 3
 ---
@@ -137,11 +137,11 @@ knitr::include_graphics("README_img/utilized_approaches.png")
 
 The prediction results of the outcome **logarithm of number of downloads over 1 year time** on the test set are shown below. 
 
-```{r pred_results, echo=FALSE,  out.width = '99%'}
+```{r pred_results, echo=FALSE,  out.width = '98%'}
 knitr::include_graphics("README_img/pred_results.png")
 ```
 
-```{r pred_results_comparison, echo=FALSE,  out.width = '99%'}
+```{r pred_results_comparison, echo=FALSE,  out.width = '98%'}
 knitr::include_graphics("README_img/pred_results_summary.png")
 ```
 
@@ -155,6 +155,7 @@ The top variables in terms of:
 from modeling the outcome **logarithm of number of downloads over 1 year time** are shown below. 
 
 ```{r est_results, echo=FALSE,  out.width = '99%'}
+
 knitr::include_graphics("README_img/est_results.png")
 ```
 

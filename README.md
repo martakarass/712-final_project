@@ -91,9 +91,9 @@ Results: prediction MSE on test set
 
 The prediction results of the outcome **logarithm of number of downloads over 1 year time** on the test set are shown below.
 
-<img src="README_img/pred_results.png" width="99%" />
+<img src="README_img/pred_results.png" width="98%" />
 
-<img src="README_img/pred_results_summary.png" width="99%" />
+<img src="README_img/pred_results_summary.png" width="98%" />
 
 Results: explanatory variables
 ==============================
